@@ -2,7 +2,8 @@
 
 ## Status Overview
 - Completed: `Phase 0`, `Phase 1`
-- Next: `Phase 2`
+- In Progress: `Phase 2` (lighting policy/mapping/apply core implemented)
+- Next: finalize `Phase 2` events and diagnostics details
 
 ## 8-Phase Roadmap
 

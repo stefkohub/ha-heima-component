@@ -1,0 +1,16 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Heima icon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b3a53"/>
+      <stop offset="100%" stop-color="#1f7a6f"/>
+    </linearGradient>
+  </defs>
+  <rect x="24" y="24" width="464" height="464" rx="112" fill="url(#bg)"/>
+  <path d="M90 264L256 118L422 264" fill="none" stroke="#f6fbff" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M132 248V366C132 384 146 398 164 398H348C366 398 380 384 380 366V248" fill="none" stroke="#f6fbff" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="256" cy="296" r="44" fill="#ffb703"/>
+  <path d="M256 222V192" stroke="#ffb703" stroke-width="16" stroke-linecap="round"/>
+  <path d="M256 400V370" stroke="#ffb703" stroke-width="16" stroke-linecap="round"/>
+  <path d="M330 296H360" stroke="#ffb703" stroke-width="16" stroke-linecap="round"/>
+  <path d="M152 296H182" stroke="#ffb703" stroke-width="16" stroke-linecap="round"/>
+</svg>

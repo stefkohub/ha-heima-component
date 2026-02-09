@@ -1,8 +1,9 @@
-"""Heima runtime engine (core v0/v1 foundation)."""
+"""Heima runtime engine (core + lighting v1)."""
 
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -11,10 +12,20 @@ from uuid import uuid4
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from ..const import OPT_PEOPLE_ANON, OPT_PEOPLE_NAMED, OPT_ROOMS, OPT_SECURITY
+from ..const import (
+    DEFAULT_LIGHTING_APPLY_MODE,
+    OPT_LIGHTING_APPLY_MODE,
+    OPT_LIGHTING_ROOMS,
+    OPT_LIGHTING_ZONES,
+    OPT_PEOPLE_ANON,
+    OPT_PEOPLE_NAMED,
+    OPT_ROOMS,
+    OPT_SECURITY,
+)
 from ..entities.registry import build_registry
 from ..models import HeimaOptions
-from .contracts import ApplyPlan
+from .contracts import ApplyPlan, ApplyStep
+from .lighting import pick_scene_for_intent, resolve_zone_intent
 from .policy import resolve_house_state
 from .snapshot import DecisionSnapshot
 from .state_store import CanonicalState
@@ -39,6 +50,8 @@ _HOUSE_SIGNAL_ENTITIES = {
     "binary_sensor.work_window",
 }
 
+_LIGHTING_MIN_SECONDS_BETWEEN_APPLIES = 10
+
 
 @dataclass(frozen=True)
 class EngineHealth:
@@ -59,6 +72,8 @@ class HeimaEngine:
         self._snapshot = DecisionSnapshot.empty()
         self._state = CanonicalState()
         self._apply_plan = ApplyPlan.empty()
+        self._lighting_last_scene: dict[str, str] = {}
+        self._lighting_last_ts: dict[str, float] = {}
 
     @property
     def health(self) -> EngineHealth:
@@ -95,8 +110,14 @@ class HeimaEngine:
         _LOGGER.debug("Heima evaluation requested: %s", reason)
         snapshot = self._compute_snapshot(reason=reason)
         self._snapshot = snapshot
-        self._apply_plan = ApplyPlan.empty()
         self._apply_snapshot_to_canonical_state(snapshot)
+
+        plan = self._build_apply_plan(snapshot)
+        self._apply_plan = plan
+
+        if self._options.engine_enabled and self._lighting_apply_mode() == "scene":
+            await self._execute_apply_plan(plan)
+
         return snapshot
 
     def tracked_entity_ids(self) -> set[str]:
@@ -228,11 +249,11 @@ class HeimaEngine:
             work_window=work_window,
         )
 
-        lighting_intents = {
-            key.replace("heima_lighting_intent_", ""): value
-            for key, value in self._state.selects.items()
-            if key.startswith("heima_lighting_intent_") and value
-        }
+        lighting_intents = self._compute_lighting_intents(
+            house_state=house_state,
+            occupied_rooms=occupied_rooms,
+        )
+
         heating_intent = self._state.get_select("heima_heating_intent") or "auto"
 
         self._state.set_binary("heima_anyone_home", anyone_home)
@@ -240,6 +261,9 @@ class HeimaEngine:
         self._state.set_sensor("heima_people_home_list", ",".join(people_home_list))
         self._state.set_sensor("heima_house_state", house_state)
         self._state.set_sensor("heima_house_state_reason", house_reason)
+
+        if security_reason == "disabled" and "heima_security_reason" in self._state.sensors:
+            self._state.set_sensor("heima_security_reason", security_reason)
 
         return DecisionSnapshot(
             snapshot_id=str(uuid4()),
@@ -253,6 +277,114 @@ class HeimaEngine:
             security_state=security_state,
             notes=f"reason={reason}",
         )
+
+    def _compute_lighting_intents(self, house_state: str, occupied_rooms: list[str]) -> dict[str, str]:
+        options = dict(self._entry.options)
+        occupied = set(occupied_rooms)
+        lighting_intents: dict[str, str] = {}
+
+        for zone in options.get(OPT_LIGHTING_ZONES, []):
+            zone_id = zone.get("zone_id")
+            if not zone_id:
+                continue
+            rooms = list(zone.get("rooms", []))
+            zone_occupied = any(room_id in occupied for room_id in rooms)
+
+            select_key = f"heima_lighting_intent_{zone_id}"
+            requested_intent = self._state.get_select(select_key) or "auto"
+            final_intent = resolve_zone_intent(requested_intent, house_state, zone_occupied)
+            lighting_intents[zone_id] = final_intent
+
+        return lighting_intents
+
+    def _build_apply_plan(self, snapshot: DecisionSnapshot) -> ApplyPlan:
+        room_maps = self._lighting_room_maps()
+        steps: list[ApplyStep] = []
+
+        for zone_id, intent in snapshot.lighting_intents.items():
+            for room_id in self._zone_rooms(zone_id):
+                if self._is_lighting_room_hold_on(room_id):
+                    continue
+
+                room_map = room_maps.get(room_id)
+                if not room_map:
+                    continue
+
+                scene_entity = pick_scene_for_intent(room_map, intent)
+                if not scene_entity:
+                    continue
+
+                if not self._should_apply_scene(room_id, scene_entity):
+                    continue
+
+                steps.append(
+                    ApplyStep(
+                        domain="lighting",
+                        target=room_id,
+                        action="scene.turn_on",
+                        params={"entity_id": scene_entity},
+                        reason=f"intent:{intent}",
+                    )
+                )
+
+        return ApplyPlan(steps=steps)
+
+    async def _execute_apply_plan(self, plan: ApplyPlan) -> None:
+        for step in plan.steps:
+            if step.action != "scene.turn_on":
+                continue
+
+            scene_entity = step.params.get("entity_id")
+            if not isinstance(scene_entity, str) or not scene_entity.startswith("scene."):
+                continue
+
+            if self._hass.states.get(scene_entity) is None:
+                _LOGGER.warning("Skipping missing scene entity: %s", scene_entity)
+                continue
+
+            await self._hass.services.async_call(
+                "scene",
+                "turn_on",
+                {"entity_id": scene_entity},
+                blocking=False,
+            )
+            self._mark_scene_applied(step.target, scene_entity)
+
+    def _should_apply_scene(self, room_id: str, scene_entity: str) -> bool:
+        now = time.monotonic()
+        last_scene = self._lighting_last_scene.get(room_id)
+        last_ts = self._lighting_last_ts.get(room_id, 0.0)
+
+        if last_scene == scene_entity and (now - last_ts) < _LIGHTING_MIN_SECONDS_BETWEEN_APPLIES:
+            return False
+
+        return True
+
+    def _mark_scene_applied(self, room_id: str, scene_entity: str) -> None:
+        self._lighting_last_scene[room_id] = scene_entity
+        self._lighting_last_ts[room_id] = time.monotonic()
+
+    def _lighting_room_maps(self) -> dict[str, dict[str, Any]]:
+        options = dict(self._entry.options)
+        mappings: dict[str, dict[str, Any]] = {}
+        for room_map in options.get(OPT_LIGHTING_ROOMS, []):
+            room_id = room_map.get("room_id")
+            if room_id:
+                mappings[str(room_id)] = dict(room_map)
+        return mappings
+
+    def _lighting_apply_mode(self) -> str:
+        mode = str(
+            dict(self._entry.options).get(OPT_LIGHTING_APPLY_MODE, DEFAULT_LIGHTING_APPLY_MODE)
+        )
+        if mode not in {"scene", "delegate"}:
+            return DEFAULT_LIGHTING_APPLY_MODE
+        return mode
+
+    def _is_lighting_room_hold_on(self, room_id: str) -> bool:
+        key = f"heima_lighting_manual_hold_{room_id}"
+        value = self._state.get_binary(key)
+        return bool(value)
 
     def _compute_named_person_presence(self, person_cfg: dict[str, Any]) -> tuple[bool, str, int]:
         method = person_cfg.get("presence_method", "ha_person")
@@ -329,7 +461,7 @@ class HeimaEngine:
 
     def _zone_rooms(self, zone_id: str) -> list[str]:
         options = dict(self._entry.options)
-        for zone in options.get("lighting_zones", []):
+        for zone in options.get(OPT_LIGHTING_ZONES, []):
             if zone.get("zone_id") == zone_id:
                 return list(zone.get("rooms", []))
         return []

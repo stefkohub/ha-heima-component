@@ -21,11 +21,13 @@ OPT_PEOPLE_ANON = "people_anonymous"
 OPT_ROOMS = "rooms"
 OPT_LIGHTING_ROOMS = "lighting_rooms"
 OPT_LIGHTING_ZONES = "lighting_zones"
+OPT_LIGHTING_APPLY_MODE = "lighting_apply_mode"
 OPT_HEATING = "heating"
 OPT_SECURITY = "security"
 OPT_NOTIFICATIONS = "notifications"
 
 DEFAULT_ENGINE_ENABLED = True
+DEFAULT_LIGHTING_APPLY_MODE = "scene"
 
 # Services
 SERVICE_COMMAND = "command"

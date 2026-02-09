@@ -22,8 +22,10 @@ from .const import (
     CONF_LANGUAGE,
     CONF_TIMEZONE,
     DEFAULT_ENGINE_ENABLED,
+    DEFAULT_LIGHTING_APPLY_MODE,
     DOMAIN,
     OPT_HEATING,
+    OPT_LIGHTING_APPLY_MODE,
     OPT_LIGHTING_ROOMS,
     OPT_LIGHTING_ZONES,
     OPT_NOTIFICATIONS,
@@ -36,6 +38,7 @@ from .const import (
 PRESENCE_METHODS = ["ha_person", "quorum", "manual"]
 ROOM_LOGIC = ["any_of", "all_of"]
 HEATING_APPLY_MODES = ["delegate_to_scheduler", "set_temperature"]
+LIGHTING_APPLY_MODES = ["scene", "delegate"]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,6 +86,7 @@ class HeimaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_ENGINE_ENABLED: user_input.get(CONF_ENGINE_ENABLED, DEFAULT_ENGINE_ENABLED),
             CONF_TIMEZONE: _default_timezone(self.hass),
             CONF_LANGUAGE: _default_language(self.hass),
+            OPT_LIGHTING_APPLY_MODE: DEFAULT_LIGHTING_APPLY_MODE,
         }
         return self.async_create_entry(title="Heima", data={}, options=options)
 
@@ -148,6 +152,12 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                     CONF_LANGUAGE,
                     default=self.options.get(CONF_LANGUAGE, _default_language(self.hass)),
                 ): cv.string,
+                vol.Optional(
+                    OPT_LIGHTING_APPLY_MODE,
+                    default=self.options.get(
+                        OPT_LIGHTING_APPLY_MODE, DEFAULT_LIGHTING_APPLY_MODE
+                    ),
+                ): vol.In(LIGHTING_APPLY_MODES),
             }
         )
         if user_input is None:
@@ -166,6 +176,9 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         )
         self.options[CONF_TIMEZONE] = timezone_value
         self.options[CONF_LANGUAGE] = user_input.get(CONF_LANGUAGE, _default_language(self.hass))
+        self.options[OPT_LIGHTING_APPLY_MODE] = user_input.get(
+            OPT_LIGHTING_APPLY_MODE, DEFAULT_LIGHTING_APPLY_MODE
+        )
         return await self.async_step_people_menu()
 
     # ---- People (named + anonymous) ----

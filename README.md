@@ -2,6 +2,9 @@
 
 Heima is an intent-driven home intelligence engine for Home Assistant.
 
+## Project Icon
+![Heima icon](docs/assets/heima-icon.svg)
+
 ## Development status
 This repository currently contains an implementation skeleton aligned with the specs in `docs/specs/`.
 
@@ -13,4 +16,3 @@ This repository currently contains an implementation skeleton aligned with the s
 
 ## Specs
 See `docs/specs/INDEX.md` and the versioned spec files.
-
