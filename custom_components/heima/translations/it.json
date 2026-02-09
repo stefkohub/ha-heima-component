@@ -1,0 +1,237 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Heima",
+        "description": "Configura Heima (iniziale). La maggior parte delle opzioni è in Opzioni.",
+        "data": {
+          "engine_enabled": "Abilita motore"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "general": {
+        "title": "Generale",
+        "data": {
+          "engine_enabled": "Abilita motore",
+          "timezone": "Fuso orario",
+          "language": "Lingua"
+        }
+      },
+      "people_menu": {
+        "title": "Persone",
+        "menu_options": {
+          "people_add": "Aggiungi persona",
+          "people_edit": "Modifica persona",
+          "people_remove": "Rimuovi persona",
+          "people_anonymous": "Presenza anonima",
+          "people_save": "Salva e chiudi",
+          "people_next": "Avanti"
+        }
+      },
+      "people_add": {
+        "title": "Aggiungi Persona",
+        "data": {
+          "slug": "Slug",
+          "display_name": "Nome visualizzato",
+          "presence_method": "Metodo presenza",
+          "person_entity": "Entita persona",
+          "sources": "Sorgenti",
+          "required": "Sorgenti richieste",
+          "arrive_hold_s": "Hold arrivo (s)",
+          "leave_hold_s": "Hold uscita (s)",
+          "enable_override": "Abilita override"
+        }
+      },
+      "people_edit": {
+        "title": "Modifica Persona",
+        "data": {
+          "person": "Persona"
+        }
+      },
+      "people_edit_form": {
+        "title": "Modifica Persona",
+        "data": {
+          "slug": "Slug",
+          "display_name": "Nome visualizzato",
+          "presence_method": "Metodo presenza",
+          "person_entity": "Entita persona",
+          "sources": "Sorgenti",
+          "required": "Sorgenti richieste",
+          "arrive_hold_s": "Hold arrivo (s)",
+          "leave_hold_s": "Hold uscita (s)",
+          "enable_override": "Abilita override"
+        }
+      },
+      "people_remove": {
+        "title": "Rimuovi Persona",
+        "data": {
+          "person": "Persona"
+        }
+      },
+      "people_anonymous": {
+        "title": "Presenza Anonima",
+        "data": {
+          "enabled": "Abilita presenza anonima",
+          "sources": "Sorgenti",
+          "required": "Sorgenti richieste",
+          "anonymous_count_weight": "Peso conteggio",
+          "arrive_hold_s": "Hold arrivo (s)",
+          "leave_hold_s": "Hold uscita (s)"
+        }
+      },
+      "rooms_menu": {
+        "title": "Stanze",
+        "menu_options": {
+          "rooms_add": "Aggiungi stanza",
+          "rooms_edit": "Modifica stanza",
+          "rooms_remove": "Rimuovi stanza",
+          "rooms_import_areas": "Importa aree HA",
+          "rooms_save": "Salva e chiudi",
+          "rooms_next": "Avanti"
+        }
+      },
+      "rooms_add": {
+        "title": "Aggiungi Stanza",
+        "data": {
+          "room_id": "Room id",
+          "display_name": "Nome visualizzato",
+          "area_id": "Area HA",
+          "sources": "Sorgenti",
+          "logic": "Logica",
+          "on_dwell_s": "On dwell (s)",
+          "off_dwell_s": "Off dwell (s)",
+          "max_on_s": "Max on (s)"
+        }
+      },
+      "rooms_edit": {
+        "title": "Modifica Stanza",
+        "data": {
+          "room": "Stanza"
+        }
+      },
+      "rooms_edit_form": {
+        "title": "Modifica Stanza",
+        "data": {
+          "room_id": "Room id",
+          "display_name": "Nome visualizzato",
+          "area_id": "Area HA",
+          "sources": "Sorgenti",
+          "logic": "Logica",
+          "on_dwell_s": "On dwell (s)",
+          "off_dwell_s": "Off dwell (s)",
+          "max_on_s": "Max on (s)"
+        }
+      },
+      "rooms_remove": {
+        "title": "Rimuovi Stanza",
+        "data": {
+          "room": "Stanza"
+        }
+      },
+      "lighting_rooms_menu": {
+        "title": "Stanze Illuminazione",
+        "menu_options": {
+          "lighting_rooms_edit": "Modifica scene stanza",
+          "lighting_rooms_save": "Salva e chiudi",
+          "lighting_rooms_next": "Avanti"
+        }
+      },
+      "lighting_rooms_edit": {
+        "title": "Seleziona Stanza",
+        "data": {
+          "room": "Stanza"
+        }
+      },
+      "lighting_rooms_edit_form": {
+        "title": "Scene Stanza",
+        "data": {
+          "room_id": "Room id",
+          "scene_evening": "Scena sera",
+          "scene_relax": "Scena relax",
+          "scene_night": "Scena notte",
+          "scene_off": "Scena off",
+          "enable_manual_hold": "Abilita hold manuale"
+        }
+      },
+      "lighting_zones_menu": {
+        "title": "Zone Illuminazione",
+        "menu_options": {
+          "lighting_zones_add": "Aggiungi zona",
+          "lighting_zones_edit": "Modifica zona",
+          "lighting_zones_remove": "Rimuovi zona",
+          "lighting_zones_save": "Salva e chiudi",
+          "lighting_zones_next": "Avanti"
+        }
+      },
+      "lighting_zones_add": {
+        "title": "Aggiungi Zona Illuminazione",
+        "data": {
+          "zone_id": "Zone id",
+          "display_name": "Nome visualizzato",
+          "rooms": "Stanze"
+        }
+      },
+      "lighting_zones_edit": {
+        "title": "Modifica Zona Illuminazione",
+        "data": {
+          "zone": "Zona"
+        }
+      },
+      "lighting_zones_edit_form": {
+        "title": "Modifica Zona Illuminazione",
+        "data": {
+          "zone_id": "Zone id",
+          "display_name": "Nome visualizzato",
+          "rooms": "Stanze"
+        }
+      },
+      "lighting_zones_remove": {
+        "title": "Rimuovi Zona Illuminazione",
+        "data": {
+          "zone": "Zona"
+        }
+      },
+      "heating": {
+        "title": "Riscaldamento",
+        "data": {
+          "climate_entity": "Entita climate",
+          "apply_mode_auto": "Modalita apply",
+          "setpoint_eco": "Setpoint eco",
+          "setpoint_comfort": "Setpoint comfort",
+          "setpoint_preheat": "Setpoint preheat",
+          "min_seconds_between_commands": "Secondi minimi tra comandi",
+          "verify_after_s": "Verifica dopo (s)",
+          "max_retries": "Retry massimi"
+        }
+      },
+      "security": {
+        "title": "Sicurezza",
+        "data": {
+          "enabled": "Abilita controlli sicurezza",
+          "security_state_entity": "Entita stato sicurezza",
+          "armed_away_value": "Valore armed away",
+          "armed_home_value": "Valore armed home"
+        }
+      },
+      "notifications": {
+        "title": "Notifiche",
+        "data": {
+          "routes": "Route notify",
+          "dedup_window_s": "Finestra dedup (s)",
+          "rate_limit_per_key_s": "Rate limit per key (s)"
+        }
+      }
+    },
+    "error": {
+      "required": "Obbligatorio",
+      "duplicate": "Gia esistente",
+      "invalid_required": "Il numero richiesto deve essere minore o uguale alle sorgenti",
+      "reserved_prefix": "Il valore non puo iniziare con 'heima_'",
+      "invalid_time_zone": "Fuso orario non valido",
+      "invalid_slug": "Slug non valido"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "domain": "heima",
+  "name": "Heima",
+  "version": "0.2.0",
+  "documentation": "https://github.com/StefanoIOD/ha-heima-component",
+  "issue_tracker": "https://github.com/StefanoIOD/ha-heima-component/issues",
+  "codeowners": [
+    "@StefanoIOD"
+  ],
+  "config_flow": true,
+  "iot_class": "local_push",
+  "requirements": [],
+  "integration_type": "hub"
+}

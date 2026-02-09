@@ -1,0 +1,76 @@
+command:
+  name: Heima Command
+  description: Execute a supported Heima command through the orchestrator.
+  fields:
+    command:
+      name: Command
+      description: Supported command name.
+      required: true
+      selector:
+        text:
+    target:
+      name: Target
+      description: Optional command target payload.
+      example: '{"zone_id": "living"}'
+      selector:
+        object:
+    params:
+      name: Params
+      description: Optional command parameters payload.
+      example: '{"intent": "scene_evening"}'
+      selector:
+        object:
+    request_id:
+      name: Request ID
+      description: Optional request identifier.
+      selector:
+        text:
+
+set_mode:
+  name: Heima Set Mode
+  description: Toggle high-level Heima mode.
+  fields:
+    mode:
+      name: Mode
+      description: Mode to toggle.
+      required: true
+      selector:
+        select:
+          options:
+            - engine_enabled
+            - guest
+            - vacation
+            - relax
+    state:
+      name: State
+      description: Desired mode state.
+      required: true
+      selector:
+        boolean:
+
+set_override:
+  name: Heima Set Override
+  description: Apply an override for person, room, or heating scope.
+  fields:
+    scope:
+      name: Scope
+      description: Override scope.
+      required: true
+      selector:
+        select:
+          options:
+            - person
+            - room
+            - heating
+    id:
+      name: Identifier
+      description: Person slug or room id depending on scope.
+      required: true
+      selector:
+        text:
+    override:
+      name: Override
+      description: Override value.
+      required: true
+      selector:
+        text:

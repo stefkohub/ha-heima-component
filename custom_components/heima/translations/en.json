@@ -1,0 +1,237 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Heima",
+        "description": "Set up Heima (initial). Most configuration is done in Options.",
+        "data": {
+          "engine_enabled": "Enable engine"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "general": {
+        "title": "General",
+        "data": {
+          "engine_enabled": "Enable engine",
+          "timezone": "Timezone",
+          "language": "Language"
+        }
+      },
+      "people_menu": {
+        "title": "People",
+        "menu_options": {
+          "people_add": "Add person",
+          "people_edit": "Edit person",
+          "people_remove": "Remove person",
+          "people_anonymous": "Anonymous presence",
+          "people_save": "Save and close",
+          "people_next": "Next"
+        }
+      },
+      "people_add": {
+        "title": "Add Person",
+        "data": {
+          "slug": "Slug",
+          "display_name": "Display name",
+          "presence_method": "Presence method",
+          "person_entity": "Person entity",
+          "sources": "Sources",
+          "required": "Required sources",
+          "arrive_hold_s": "Arrive hold (s)",
+          "leave_hold_s": "Leave hold (s)",
+          "enable_override": "Enable override"
+        }
+      },
+      "people_edit": {
+        "title": "Edit Person",
+        "data": {
+          "person": "Person"
+        }
+      },
+      "people_edit_form": {
+        "title": "Edit Person",
+        "data": {
+          "slug": "Slug",
+          "display_name": "Display name",
+          "presence_method": "Presence method",
+          "person_entity": "Person entity",
+          "sources": "Sources",
+          "required": "Required sources",
+          "arrive_hold_s": "Arrive hold (s)",
+          "leave_hold_s": "Leave hold (s)",
+          "enable_override": "Enable override"
+        }
+      },
+      "people_remove": {
+        "title": "Remove Person",
+        "data": {
+          "person": "Person"
+        }
+      },
+      "people_anonymous": {
+        "title": "Anonymous Presence",
+        "data": {
+          "enabled": "Enable anonymous presence",
+          "sources": "Sources",
+          "required": "Required sources",
+          "anonymous_count_weight": "Count weight",
+          "arrive_hold_s": "Arrive hold (s)",
+          "leave_hold_s": "Leave hold (s)"
+        }
+      },
+      "rooms_menu": {
+        "title": "Rooms",
+        "menu_options": {
+          "rooms_add": "Add room",
+          "rooms_edit": "Edit room",
+          "rooms_remove": "Remove room",
+          "rooms_import_areas": "Import HA areas",
+          "rooms_save": "Save and close",
+          "rooms_next": "Next"
+        }
+      },
+      "rooms_add": {
+        "title": "Add Room",
+        "data": {
+          "room_id": "Room id",
+          "display_name": "Display name",
+          "area_id": "HA area",
+          "sources": "Sources",
+          "logic": "Logic",
+          "on_dwell_s": "On dwell (s)",
+          "off_dwell_s": "Off dwell (s)",
+          "max_on_s": "Max on (s)"
+        }
+      },
+      "rooms_edit": {
+        "title": "Edit Room",
+        "data": {
+          "room": "Room"
+        }
+      },
+      "rooms_edit_form": {
+        "title": "Edit Room",
+        "data": {
+          "room_id": "Room id",
+          "display_name": "Display name",
+          "area_id": "HA area",
+          "sources": "Sources",
+          "logic": "Logic",
+          "on_dwell_s": "On dwell (s)",
+          "off_dwell_s": "Off dwell (s)",
+          "max_on_s": "Max on (s)"
+        }
+      },
+      "rooms_remove": {
+        "title": "Remove Room",
+        "data": {
+          "room": "Room"
+        }
+      },
+      "lighting_rooms_menu": {
+        "title": "Lighting Rooms",
+        "menu_options": {
+          "lighting_rooms_edit": "Edit room scenes",
+          "lighting_rooms_save": "Save and close",
+          "lighting_rooms_next": "Next"
+        }
+      },
+      "lighting_rooms_edit": {
+        "title": "Select Room",
+        "data": {
+          "room": "Room"
+        }
+      },
+      "lighting_rooms_edit_form": {
+        "title": "Room Scenes",
+        "data": {
+          "room_id": "Room id",
+          "scene_evening": "Evening scene",
+          "scene_relax": "Relax scene",
+          "scene_night": "Night scene",
+          "scene_off": "Off scene",
+          "enable_manual_hold": "Enable manual hold"
+        }
+      },
+      "lighting_zones_menu": {
+        "title": "Lighting Zones",
+        "menu_options": {
+          "lighting_zones_add": "Add zone",
+          "lighting_zones_edit": "Edit zone",
+          "lighting_zones_remove": "Remove zone",
+          "lighting_zones_save": "Save and close",
+          "lighting_zones_next": "Next"
+        }
+      },
+      "lighting_zones_add": {
+        "title": "Add Lighting Zone",
+        "data": {
+          "zone_id": "Zone id",
+          "display_name": "Display name",
+          "rooms": "Rooms"
+        }
+      },
+      "lighting_zones_edit": {
+        "title": "Edit Lighting Zone",
+        "data": {
+          "zone": "Zone"
+        }
+      },
+      "lighting_zones_edit_form": {
+        "title": "Edit Lighting Zone",
+        "data": {
+          "zone_id": "Zone id",
+          "display_name": "Display name",
+          "rooms": "Rooms"
+        }
+      },
+      "lighting_zones_remove": {
+        "title": "Remove Lighting Zone",
+        "data": {
+          "zone": "Zone"
+        }
+      },
+      "heating": {
+        "title": "Heating",
+        "data": {
+          "climate_entity": "Climate entity",
+          "apply_mode_auto": "Apply mode",
+          "setpoint_eco": "Eco setpoint",
+          "setpoint_comfort": "Comfort setpoint",
+          "setpoint_preheat": "Preheat setpoint",
+          "min_seconds_between_commands": "Min seconds between commands",
+          "verify_after_s": "Verify after (s)",
+          "max_retries": "Max retries"
+        }
+      },
+      "security": {
+        "title": "Security",
+        "data": {
+          "enabled": "Enable security checks",
+          "security_state_entity": "Security state entity",
+          "armed_away_value": "Armed away value",
+          "armed_home_value": "Armed home value"
+        }
+      },
+      "notifications": {
+        "title": "Notifications",
+        "data": {
+          "routes": "Notify routes",
+          "dedup_window_s": "Dedup window (s)",
+          "rate_limit_per_key_s": "Rate limit per key (s)"
+        }
+      }
+    },
+    "error": {
+      "required": "Required",
+      "duplicate": "Already exists",
+      "invalid_required": "Required count must be less than or equal to sources",
+      "reserved_prefix": "Value cannot start with 'heima_'",
+      "invalid_time_zone": "Invalid timezone",
+      "invalid_slug": "Invalid slug"
+    }
+  }
+}

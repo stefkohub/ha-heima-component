@@ -1,0 +1,8 @@
+{
+  "name": "Heima",
+  "content_in_root": false,
+  "domains": [
+    "heima"
+  ],
+  "homeassistant": "2025.1.0"
+}
