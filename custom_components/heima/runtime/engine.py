@@ -128,6 +128,30 @@ class HeimaEngine:
 
         return snapshot
 
+    async def async_emit_external_event(
+        self,
+        *,
+        event_type: str,
+        key: str,
+        severity: str,
+        title: str,
+        message: str,
+        context: dict[str, Any] | None = None,
+    ) -> bool:
+        """Emit an external/runtime event through the unified event pipeline."""
+        emitted = await self._emit_event_obj(
+            HeimaEvent(
+                type=event_type,
+                key=key,
+                severity=severity,
+                title=title,
+                message=message,
+                context=dict(context or {}),
+            )
+        )
+        self._sync_event_sensors()
+        return emitted
+
     def tracked_entity_ids(self) -> set[str]:
         """Entities that should trigger recomputation on state change."""
         options = dict(self._entry.options)

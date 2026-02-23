@@ -13,7 +13,6 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import (
     DOMAIN,
-    EVENT_HEIMA_EVENT,
     SERVICE_COMMAND,
     SERVICE_SET_MODE,
     SERVICE_SET_OVERRIDE,
@@ -193,19 +192,25 @@ async def async_register_services(hass: HomeAssistant) -> None:
             return
 
         if command == "notify_event":
-            hass.bus.async_fire(
-                EVENT_HEIMA_EVENT,
-                {
-                    "type": str(params.get("type", "custom.notify_event")),
-                    "key": str(params.get("key", "custom.notify_event")),
-                    "severity": str(params.get("severity", "info")),
-                    "title": str(params.get("title", "Heima event")),
-                    "message": str(params.get("message", "")),
-                    "context": dict(params.get("context", {})),
-                    "event_id": data.get("request_id", ""),
-                    "ts": "",
-                },
-            )
+            event_type = str(params.get("type", "custom.notify_event"))
+            key = str(params.get("key", "custom.notify_event"))
+            severity = str(params.get("severity", "info"))
+            title = str(params.get("title", "Heima event"))
+            message = str(params.get("message", ""))
+            context = dict(params.get("context", {}))
+            if data.get("request_id"):
+                context.setdefault("request_id", str(data.get("request_id")))
+
+            for coordinator in coordinators:
+                await coordinator.async_emit_event(
+                    event_type=event_type,
+                    key=key,
+                    severity=severity,
+                    title=title,
+                    message=message,
+                    context=context,
+                    reason="service:notify_event",
+                )
             return
 
     async def _handle_set_mode(call: ServiceCall) -> None:

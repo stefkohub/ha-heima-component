@@ -85,6 +85,37 @@ class HeimaCoordinator(DataUpdateCoordinator[HeimaRuntimeState]):
         )
         await self.async_refresh()
 
+    async def async_emit_event(
+        self,
+        *,
+        event_type: str,
+        key: str,
+        severity: str,
+        title: str,
+        message: str,
+        context: dict | None = None,
+        reason: str = "service:notify_event",
+    ) -> bool:
+        """Emit an event through the engine pipeline and refresh coordinator state."""
+        emitted = await self.engine.async_emit_external_event(
+            event_type=event_type,
+            key=key,
+            severity=severity,
+            title=title,
+            message=message,
+            context=context or {},
+        )
+        self.data = HeimaRuntimeState(
+            health_ok=self.engine.health.ok,
+            health_reason=self.engine.health.reason,
+            house_state=self.engine.snapshot.house_state,
+            house_state_reason=self.engine.state.get_sensor("heima_house_state_reason") or "",
+            last_decision=f"{reason}:{'emitted' if emitted else 'suppressed'}",
+            last_action="event_emitted" if emitted else "event_suppressed",
+        )
+        await self.async_refresh()
+        return emitted
+
     async def async_shutdown(self) -> None:
         """Shutdown runtime."""
         self._unsubscribe_state_changes()

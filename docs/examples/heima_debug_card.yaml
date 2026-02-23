@@ -1,0 +1,226 @@
+# Heima Debug Card (Lovelace YAML)
+# Usage:
+# 1) Dashboard -> Edit -> Add card -> Manual
+# 2) Paste this YAML
+# 3) Replace placeholder room/zone ids and add/remove entities based on your setup
+#
+# This is a single debug card (`vertical-stack`) to monitor the features implemented so far:
+# - canonical runtime state (people/occupancy/house_state/security)
+# - lighting intents + manual holds
+# - event pipeline sensors (`heima_last_event`, `heima_event_stats`)
+# - service-command testing (`heima.command`, `heima.set_override`)
+
+type: vertical-stack
+cards:
+  - type: markdown
+    content: |
+      ## Heima Debug Console
+      Runtime status, canonical entities, lighting controls, and service tests.
+      Update placeholders (`living_zone`, `living_room`, people slugs) to match your configuration.
+
+  - type: entities
+    title: Runtime Overview
+    show_header_toggle: false
+    entities:
+      - entity: sensor.heima_house_state
+      - entity: sensor.heima_house_state_reason
+      - entity: binary_sensor.heima_anyone_home
+      - entity: sensor.heima_people_count
+      - entity: sensor.heima_people_home_list
+      - entity: sensor.heima_security_state
+      - entity: sensor.heima_security_reason
+      - entity: sensor.heima_last_event
+      - entity: sensor.heima_event_stats
+
+  - type: entities
+    title: People (Examples)
+    show_header_toggle: false
+    entities:
+      # Replace/add slugs based on your config entry
+      - entity: binary_sensor.heima_person_stefano_home
+      - entity: sensor.heima_person_stefano_confidence
+      - entity: sensor.heima_person_stefano_source
+      - entity: select.heima_person_stefano_override
+      - entity: binary_sensor.heima_person_testperson_home
+      - entity: sensor.heima_person_testperson_confidence
+      - entity: sensor.heima_person_testperson_source
+      - entity: select.heima_person_testperson_override
+      # Optional anonymous presence
+      - entity: binary_sensor.heima_anonymous_presence
+      - entity: sensor.heima_anonymous_presence_confidence
+      - entity: sensor.heima_anonymous_presence_source
+
+  - type: entities
+    title: Occupancy (Rooms / Zones)
+    show_header_toggle: false
+    entities:
+      # Replace with your real room ids
+      - entity: binary_sensor.heima_occ_living_room
+      - entity: sensor.heima_occ_living_room_source
+      - entity: sensor.heima_occ_living_room_last_change
+      - entity: binary_sensor.heima_occ_bedroom
+      - entity: sensor.heima_occ_bedroom_source
+      - entity: sensor.heima_occ_bedroom_last_change
+      # Replace with your real zone ids
+      - entity: binary_sensor.heima_occ_zone_living_zone
+      - entity: binary_sensor.heima_occ_zone_bedroom_zone
+
+  - type: entities
+    title: Lighting Intents + Holds
+    show_header_toggle: false
+    entities:
+      # Replace with your real zone ids
+      - entity: select.heima_lighting_intent_living_zone
+      - entity: select.heima_lighting_intent_bedroom_zone
+      # Replace with your real room ids
+      - entity: binary_sensor.heima_lighting_manual_hold_living_room
+      - entity: binary_sensor.heima_lighting_manual_hold_bedroom
+
+  - type: history-graph
+    title: Heima History (Quick Signals)
+    hours_to_show: 6
+    refresh_interval: 30
+    entities:
+      - entity: sensor.heima_house_state
+      - entity: binary_sensor.heima_anyone_home
+      - entity: binary_sensor.heima_occ_living_room
+      - entity: binary_sensor.heima_occ_zone_living_zone
+
+  - type: grid
+    title: Service Tests (Commands)
+    columns: 2
+    square: false
+    cards:
+      - type: button
+        name: Recompute Now
+        icon: mdi:refresh
+        tap_action:
+          action: call-service
+          service: heima.command
+          data:
+            command: recompute_now
+
+      - type: button
+        name: Notify Test Event
+        icon: mdi:bell-outline
+        tap_action:
+          action: call-service
+          service: heima.command
+          data:
+            command: notify_event
+            params:
+              type: debug.manual_test
+              key: debug.manual_test
+              severity: info
+              title: Heima Debug Test
+              message: Manual debug event from Lovelace card
+              context:
+                source: lovelace_debug_card
+
+      - type: button
+        name: Living Zone -> Auto
+        icon: mdi:theme-light-dark
+        tap_action:
+          action: call-service
+          service: heima.command
+          data:
+            command: set_lighting_intent
+            target:
+              zone_id: living_zone
+            params:
+              intent: auto
+
+      - type: button
+        name: Living Zone -> Relax
+        icon: mdi:sofa-outline
+        tap_action:
+          action: call-service
+          service: heima.command
+          data:
+            command: set_lighting_intent
+            target:
+              zone_id: living_zone
+            params:
+              intent: scene_relax
+
+      - type: button
+        name: Hold ON (Living Room)
+        icon: mdi:hand-back-right-outline
+        tap_action:
+          action: call-service
+          service: heima.command
+          data:
+            command: set_room_lighting_hold
+            target:
+              room_id: living_room
+            params:
+              state: true
+
+      - type: button
+        name: Hold OFF (Living Room)
+        icon: mdi:hand-back-right-off-outline
+        tap_action:
+          action: call-service
+          service: heima.command
+          data:
+            command: set_room_lighting_hold
+            target:
+              room_id: living_room
+            params:
+              state: false
+
+  - type: grid
+    title: Service Tests (Overrides)
+    columns: 2
+    square: false
+    cards:
+      - type: button
+        name: Person Override Home
+        icon: mdi:account-check-outline
+        tap_action:
+          action: call-service
+          service: heima.set_override
+          data:
+            scope: person
+            id: stefano
+            override: force_home
+
+      - type: button
+        name: Person Override Auto
+        icon: mdi:account-sync-outline
+        tap_action:
+          action: call-service
+          service: heima.set_override
+          data:
+            scope: person
+            id: stefano
+            override: auto
+
+      - type: button
+        name: Hold Override ON
+        icon: mdi:toggle-switch
+        tap_action:
+          action: call-service
+          service: heima.set_override
+          data:
+            scope: lighting_room_hold
+            id: living_room
+            override: true
+
+      - type: button
+        name: Hold Override OFF
+        icon: mdi:toggle-switch-off
+        tap_action:
+          action: call-service
+          service: heima.set_override
+          data:
+            scope: lighting_room_hold
+            id: living_room
+            override: false
+
+  - type: markdown
+    content: |
+      ### Notes
+      - `sensor.heima_event_stats` contains JSON with event pipeline counters (emitted, dedup drops, rate-limit drops, last event).
+      - If `lighting_apply_mode` is `delegate`, intents and events still update but `scene.turn_on` is not called.
+      - Replace placeholder ids (`living_zone`, `living_room`, `bedroom`, `stefano`) with your actual configured ids.
