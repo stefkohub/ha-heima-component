@@ -67,6 +67,11 @@ def _is_valid_slug(value: str) -> bool:
         return False
 
 
+def _non_negative_int(value: Any) -> int:
+    """Validate an int >= 0 (useful for disabling timers/rate limits)."""
+    return vol.All(vol.Coerce(int), vol.Range(min=0))(value)
+
+
 class HeimaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Heima."""
 
@@ -99,6 +104,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
     """Handle Heima options."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        self._config_entry = config_entry
         self.options = dict(config_entry.options)
         self._editing_person_slug: str | None = None
         self._editing_room_id: str | None = None
@@ -132,6 +138,71 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
     def _store_list(self, key: str, items: list[dict[str, Any]]) -> None:
         self.options[key] = items
+
+    def _normalize_multi_value(self, value: Any) -> list[str]:
+        """Normalize selector/cv.multi_select outputs to a stable list[str]."""
+        if value is None:
+            return []
+        if isinstance(value, dict):
+            # Be defensive: some paths may return {id: true/false}.
+            return [str(k) for k, enabled in value.items() if enabled]
+        if isinstance(value, (list, tuple, set)):
+            return [str(v) for v in value if str(v)]
+        if isinstance(value, str):
+            return [value] if value else []
+        return [str(value)]
+
+    def _normalize_people_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        data = dict(payload)
+        data["slug"] = str(data.get("slug", "")).strip()
+        data["display_name"] = str(data.get("display_name", "") or "").strip()
+        data["presence_method"] = str(data.get("presence_method", "ha_person"))
+        if data.get("person_entity"):
+            data["person_entity"] = str(data["person_entity"])
+        data["sources"] = self._normalize_multi_value(data.get("sources"))
+        return data
+
+    def _normalize_room_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        data = dict(payload)
+        data["room_id"] = str(data.get("room_id", "")).strip()
+        data["display_name"] = str(data.get("display_name", "") or "").strip()
+        if data.get("area_id"):
+            data["area_id"] = str(data["area_id"])
+        data["sources"] = self._normalize_multi_value(data.get("sources"))
+        data["logic"] = str(data.get("logic", "any_of"))
+        return data
+
+    def _normalize_lighting_room_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        data = dict(payload)
+        data["room_id"] = str(data.get("room_id", "")).strip()
+        for key in ("scene_evening", "scene_relax", "scene_night", "scene_off"):
+            if data.get(key):
+                data[key] = str(data[key])
+            elif key in data and data[key] in ("", []):
+                data.pop(key, None)
+        data["enable_manual_hold"] = bool(data.get("enable_manual_hold", True))
+        return data
+
+    def _normalize_lighting_zone_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        data = dict(payload)
+        data["zone_id"] = str(data.get("zone_id", "")).strip()
+        data["display_name"] = str(data.get("display_name", "") or "").strip()
+        data["rooms"] = self._normalize_multi_value(data.get("rooms"))
+        return data
+
+    def _normalize_notifications_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        data = dict(payload)
+        data["routes"] = self._normalize_multi_value(data.get("routes"))
+        return data
+
+    def _error_if_immutable_changed(
+        self, payload: dict[str, Any], field: str, expected_value: str | None
+    ) -> dict[str, str]:
+        if expected_value is None:
+            return {}
+        if str(payload.get(field, "")) != expected_value:
+            return {field: "immutable"}
+        return {}
 
     # ---- Flow steps ----
     async def async_step_init(self, user_input=None) -> FlowResult:
@@ -202,6 +273,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         if user_input is None:
             return self.async_show_form(step_id="people_add", data_schema=self._people_schema())
 
+        user_input = self._normalize_people_payload(user_input)
         errors = self._validate_people_payload(user_input, is_edit=False)
         if errors:
             return self.async_show_form(
@@ -237,6 +309,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 step_id="people_edit_form", data_schema=self._people_schema(existing)
             )
 
+        user_input = self._normalize_people_payload(user_input)
         errors = self._validate_people_payload(user_input, is_edit=True)
         if errors:
             return self.async_show_form(
@@ -290,6 +363,9 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
             )
             return self.async_show_form(step_id="people_anonymous", data_schema=schema)
 
+        user_input = dict(user_input)
+        user_input["sources"] = self._normalize_multi_value(user_input.get("sources"))
+
         sources = user_input.get("sources", [])
         required = int(user_input.get("required", 1))
         if user_input.get("enabled") and not sources:
@@ -330,7 +406,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_people_save(self, user_input=None) -> FlowResult:
         """Persist options and close the flow from People menu."""
-        return self.async_create_entry(title="", data=self.options)
+        return self.async_create_entry(title="", data=self._finalize_options())
 
     def _people_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
         defaults = defaults or {}
@@ -358,6 +434,8 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
     def _validate_people_payload(self, payload: dict[str, Any], is_edit: bool) -> dict[str, str]:
         errors: dict[str, str] = {}
         slug = payload.get("slug", "")
+        if is_edit:
+            errors.update(self._error_if_immutable_changed(payload, "slug", self._editing_person_slug))
         if not slug:
             errors["slug"] = "required"
         elif not _is_valid_slug(slug):
@@ -365,10 +443,12 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         if slug.startswith("heima_"):
             errors["slug"] = "reserved_prefix"
 
+        existing_slugs = {p["slug"] for p in self._people_named()}
         if not is_edit:
-            existing_slugs = {p["slug"] for p in self._people_named()}
             if slug in existing_slugs:
                 errors["slug"] = "duplicate"
+        elif slug in (existing_slugs - {self._editing_person_slug}):
+            errors["slug"] = "duplicate"
 
         method = payload.get("presence_method")
         if method == "ha_person" and not payload.get("person_entity"):
@@ -401,6 +481,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         if user_input is None:
             return self.async_show_form(step_id="rooms_add", data_schema=self._room_schema())
 
+        user_input = self._normalize_room_payload(user_input)
         errors = self._validate_room_payload(user_input, is_edit=False)
         if errors:
             return self.async_show_form(
@@ -434,6 +515,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 step_id="rooms_edit_form", data_schema=self._room_schema(existing)
             )
 
+        user_input = self._normalize_room_payload(user_input)
         errors = self._validate_room_payload(user_input, is_edit=True)
         if errors:
             return self.async_show_form(
@@ -471,7 +553,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_rooms_save(self, user_input=None) -> FlowResult:
         """Persist options and close the flow from Rooms menu."""
-        return self.async_create_entry(title="", data=self.options)
+        return self.async_create_entry(title="", data=self._finalize_options())
 
     async def async_step_rooms_import_areas(self, user_input=None) -> FlowResult:
         """Import HA areas as rooms (merge with existing)."""
@@ -524,6 +606,8 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
     def _validate_room_payload(self, payload: dict[str, Any], is_edit: bool) -> dict[str, str]:
         errors: dict[str, str] = {}
         room_id = payload.get("room_id", "")
+        if is_edit:
+            errors.update(self._error_if_immutable_changed(payload, "room_id", self._editing_room_id))
         if not room_id:
             errors["room_id"] = "required"
         elif not _is_valid_slug(room_id):
@@ -531,15 +615,22 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         if room_id.startswith("heima_"):
             errors["room_id"] = "reserved_prefix"
 
+        existing_ids = {r["room_id"] for r in self._rooms()}
         if not is_edit:
-            existing_ids = {r["room_id"] for r in self._rooms()}
             if room_id in existing_ids:
                 errors["room_id"] = "duplicate"
-            area_id = payload.get("area_id")
-            if area_id:
-                existing_area_ids = {r.get("area_id") for r in self._rooms() if r.get("area_id")}
-                if area_id in existing_area_ids:
-                    errors["area_id"] = "duplicate"
+        elif room_id in (existing_ids - {self._editing_room_id}):
+            errors["room_id"] = "duplicate"
+
+        area_id = payload.get("area_id")
+        if area_id:
+            existing_area_ids = {r.get("area_id") for r in self._rooms() if r.get("area_id")}
+            if is_edit:
+                existing_room = self._find_by_key(self._rooms(), "room_id", self._editing_room_id or "")
+                existing_area_id = existing_room.get("area_id") if existing_room else None
+                existing_area_ids.discard(existing_area_id)
+            if area_id in existing_area_ids:
+                errors["area_id"] = "duplicate"
 
         sources = payload.get("sources", [])
         if not sources:
@@ -582,6 +673,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 data_schema=self._lighting_room_schema(existing),
             )
 
+        user_input = self._normalize_lighting_room_payload(user_input)
         errors = self._validate_lighting_room_payload(user_input)
         if errors:
             return self.async_show_form(
@@ -602,7 +694,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_lighting_rooms_save(self, user_input=None) -> FlowResult:
         """Persist options and close the flow from Lighting Rooms menu."""
-        return self.async_create_entry(title="", data=self.options)
+        return self.async_create_entry(title="", data=self._finalize_options())
 
     def _lighting_room_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
         defaults = defaults or {}
@@ -625,12 +717,20 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
     def _validate_lighting_room_payload(self, payload: dict[str, Any]) -> dict[str, str]:
         errors: dict[str, str] = {}
+        if self._editing_lighting_room_id is not None:
+            errors.update(
+                self._error_if_immutable_changed(
+                    payload, "room_id", self._editing_lighting_room_id
+                )
+            )
         if not payload.get("room_id"):
             errors["room_id"] = "required"
         elif not _is_valid_slug(payload.get("room_id", "")):
             errors["room_id"] = "invalid_slug"
         elif payload.get("room_id", "").startswith("heima_"):
             errors["room_id"] = "reserved_prefix"
+        elif payload.get("room_id") not in set(self._room_ids()):
+            errors["room_id"] = "unknown_room"
 
         has_scene = any(
             payload.get(key)
@@ -664,6 +764,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 step_id="lighting_zones_add", data_schema=self._lighting_zone_schema()
             )
 
+        user_input = self._normalize_lighting_zone_payload(user_input)
         errors = self._validate_lighting_zone_payload(user_input, is_edit=False)
         if errors:
             return self.async_show_form(
@@ -700,6 +801,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 data_schema=self._lighting_zone_schema(existing),
             )
 
+        user_input = self._normalize_lighting_zone_payload(user_input)
         errors = self._validate_lighting_zone_payload(user_input, is_edit=True)
         if errors:
             return self.async_show_form(
@@ -737,7 +839,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_lighting_zones_save(self, user_input=None) -> FlowResult:
         """Persist options and close the flow from Lighting Zones menu."""
-        return self.async_create_entry(title="", data=self.options)
+        return self.async_create_entry(title="", data=self._finalize_options())
 
     def _lighting_zone_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
         defaults = defaults or {}
@@ -754,6 +856,8 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
     def _validate_lighting_zone_payload(self, payload: dict[str, Any], is_edit: bool) -> dict[str, str]:
         errors: dict[str, str] = {}
         zone_id = payload.get("zone_id", "")
+        if is_edit:
+            errors.update(self._error_if_immutable_changed(payload, "zone_id", self._editing_zone_id))
         if not zone_id:
             errors["zone_id"] = "required"
         elif not _is_valid_slug(zone_id):
@@ -761,20 +865,28 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         if zone_id.startswith("heima_"):
             errors["zone_id"] = "reserved_prefix"
 
+        existing_ids = {z["zone_id"] for z in self._lighting_zones()}
         if not is_edit:
-            existing_ids = {z["zone_id"] for z in self._lighting_zones()}
             if zone_id in existing_ids:
                 errors["zone_id"] = "duplicate"
+        elif zone_id in (existing_ids - {self._editing_zone_id}):
+            errors["zone_id"] = "duplicate"
 
         rooms = payload.get("rooms", [])
         if not rooms:
             errors["rooms"] = "required"
+        else:
+            unknown_rooms = [room_id for room_id in rooms if room_id not in set(self._room_ids())]
+            if unknown_rooms:
+                errors["rooms"] = "unknown_room"
         return errors
 
     def _remove_room_from_zones(self, room_id: str) -> None:
         zones = []
         for zone in self._lighting_zones():
             rooms = [r for r in zone.get("rooms", []) if r != room_id]
+            if not rooms:
+                continue
             updated = dict(zone)
             updated["rooms"] = rooms
             zones.append(updated)
@@ -813,8 +925,44 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
             )
             return self.async_show_form(step_id="heating", data_schema=schema)
 
+        if user_input.get("apply_mode_auto") == "set_temperature" and not user_input.get("climate_entity"):
+            return self.async_show_form(
+                step_id="heating",
+                data_schema=self._heating_schema(user_input),
+                errors={"climate_entity": "required"},
+            )
+
         self.options[OPT_HEATING] = user_input
         return await self.async_step_security()
+
+    def _heating_schema(self, defaults: dict[str, Any]) -> vol.Schema:
+        return vol.Schema(
+            {
+                vol.Optional("climate_entity", default=defaults.get("climate_entity")):
+                _entity_selector(["climate"]),
+                vol.Required(
+                    "apply_mode_auto",
+                    default=defaults.get("apply_mode_auto", "delegate_to_scheduler"),
+                ): vol.In(HEATING_APPLY_MODES),
+                vol.Optional("setpoint_eco", default=defaults.get("setpoint_eco", 18.0)):
+                vol.Coerce(float),
+                vol.Optional(
+                    "setpoint_comfort", default=defaults.get("setpoint_comfort", 20.0)
+                ): vol.Coerce(float),
+                vol.Optional(
+                    "setpoint_preheat", default=defaults.get("setpoint_preheat", 21.5)
+                ): vol.Coerce(float),
+                vol.Optional(
+                    "min_seconds_between_commands",
+                    default=defaults.get("min_seconds_between_commands", 120),
+                ): cv.positive_int,
+                vol.Optional(
+                    "verify_after_s", default=defaults.get("verify_after_s", 15)
+                ): cv.positive_int,
+                vol.Optional("max_retries", default=defaults.get("max_retries", 2)):
+                cv.positive_int,
+            }
+        )
 
     # ---- Security ----
     async def async_step_security(self, user_input=None) -> FlowResult:
@@ -867,19 +1015,65 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
             schema = vol.Schema(
                 {
                     vol.Optional("routes", default=current.get("routes", [])):
-                    cv.multi_select(self._notify_services()),
+                    cv.multi_select(self._notify_service_choices(current.get("routes", []))),
                     vol.Optional("dedup_window_s", default=current.get("dedup_window_s", 60)):
-                    cv.positive_int,
+                    _non_negative_int,
                     vol.Optional(
                         "rate_limit_per_key_s", default=current.get("rate_limit_per_key_s", 300)
-                    ): cv.positive_int,
+                    ): _non_negative_int,
                 }
             )
             return self.async_show_form(step_id="notifications", data_schema=schema)
 
+        user_input = self._normalize_notifications_payload(user_input)
         self.options[OPT_NOTIFICATIONS] = user_input
-        return self.async_create_entry(title="", data=self.options)
+        return self.async_create_entry(title="", data=self._finalize_options())
 
     def _notify_services(self) -> list[str]:
         services = self.hass.services.async_services().get("notify", {})
         return sorted(services.keys())
+
+    def _notify_service_choices(self, selected_routes: Any) -> list[str]:
+        routes = self._normalize_multi_value(selected_routes)
+        return sorted(set(self._notify_services()) | set(routes))
+
+    def _finalize_options(self) -> dict[str, Any]:
+        """Return a coherent options snapshot before persisting."""
+        options = dict(self.options)
+
+        room_ids = {str(r.get("room_id")) for r in options.get(OPT_ROOMS, []) if r.get("room_id")}
+        lighting_rooms = []
+        for room_cfg in options.get(OPT_LIGHTING_ROOMS, []):
+            room_id = str(room_cfg.get("room_id", "")).strip()
+            if not room_id or room_id not in room_ids:
+                continue
+            lighting_rooms.append(self._normalize_lighting_room_payload(room_cfg))
+        options[OPT_LIGHTING_ROOMS] = lighting_rooms
+
+        lighting_zones = []
+        for zone_cfg in options.get(OPT_LIGHTING_ZONES, []):
+            zone = self._normalize_lighting_zone_payload(zone_cfg)
+            zone["rooms"] = [room_id for room_id in zone.get("rooms", []) if room_id in room_ids]
+            if not zone.get("rooms"):
+                continue
+            lighting_zones.append(zone)
+        options[OPT_LIGHTING_ZONES] = lighting_zones
+
+        if OPT_PEOPLE_NAMED in options:
+            options[OPT_PEOPLE_NAMED] = [
+                self._normalize_people_payload(person) for person in options.get(OPT_PEOPLE_NAMED, [])
+            ]
+        if OPT_ROOMS in options:
+            options[OPT_ROOMS] = [self._normalize_room_payload(room) for room in options.get(OPT_ROOMS, [])]
+        if OPT_NOTIFICATIONS in options:
+            options[OPT_NOTIFICATIONS] = self._normalize_notifications_payload(
+                options.get(OPT_NOTIFICATIONS, {})
+            )
+        if OPT_PEOPLE_ANON in options:
+            anon = dict(options.get(OPT_PEOPLE_ANON, {}))
+            anon["sources"] = self._normalize_multi_value(anon.get("sources"))
+            options[OPT_PEOPLE_ANON] = anon
+
+        # Keep the in-memory working copy coherent for subsequent menu steps in the same flow.
+        self.options = options
+        return options
