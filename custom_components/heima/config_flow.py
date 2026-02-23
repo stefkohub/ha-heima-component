@@ -727,12 +727,6 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         elif payload.get("room_id") not in set(self._room_ids()):
             errors["room_id"] = "unknown_room"
 
-        has_scene = any(
-            payload.get(key)
-            for key in ("scene_evening", "scene_relax", "scene_night", "scene_off")
-        )
-        if not has_scene:
-            errors["scene_evening"] = "required"
         return errors
 
     def _remove_lighting_room_mapping(self, room_id: str) -> None:

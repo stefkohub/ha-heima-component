@@ -344,6 +344,7 @@ class HeimaEngine:
 
     def _build_apply_plan(self, snapshot: DecisionSnapshot) -> ApplyPlan:
         room_maps = self._lighting_room_maps()
+        room_configs = self._room_configs()
         steps: list[ApplyStep] = []
         room_trace: dict[str, list[dict[str, Any]]] = {}
         room_plan_counts: dict[str, int] = {}
@@ -357,6 +358,8 @@ class HeimaEngine:
                     "intent": intent,
                     "hold": False,
                     "room_mapping_found": False,
+                    "action": None,
+                    "action_params": None,
                     "scene_entity": None,
                     "scene_resolution": None,
                     "apply_queued": False,
@@ -379,6 +382,35 @@ class HeimaEngine:
                 decision["scene_entity"] = scene_entity
                 decision["scene_resolution"] = scene_resolution
                 if not scene_entity:
+                    if intent == "off":
+                        area_id = str(room_configs.get(room_id, {}).get("area_id") or "").strip()
+                        if area_id:
+                            action_fingerprint = f"light.turn_off:area:{area_id}"
+                            if not self._should_apply_scene(room_id, action_fingerprint):
+                                decision["skip_reason"] = "rate_limited_or_duplicate"
+                                decision["scene_resolution"] = "fallback:off->light.turn_off(area)"
+                                decision["action"] = "light.turn_off"
+                                decision["action_params"] = {"area_id": area_id}
+                                room_trace.setdefault(room_id, []).append(decision)
+                                continue
+
+                            decision["scene_resolution"] = "fallback:off->light.turn_off(area)"
+                            decision["action"] = "light.turn_off"
+                            decision["action_params"] = {"area_id": area_id}
+                            decision["apply_queued"] = True
+                            room_plan_counts[room_id] = room_plan_counts.get(room_id, 0) + 1
+                            room_trace.setdefault(room_id, []).append(decision)
+                            steps.append(
+                                ApplyStep(
+                                    domain="lighting",
+                                    target=room_id,
+                                    action="light.turn_off",
+                                    params={"area_id": area_id},
+                                    reason="intent:off(area_fallback)",
+                                )
+                            )
+                            continue
+
                     decision["skip_reason"] = "scene_missing"
                     room_trace.setdefault(room_id, []).append(decision)
                     self._queue_event(
@@ -438,24 +470,36 @@ class HeimaEngine:
 
     async def _execute_apply_plan(self, plan: ApplyPlan) -> None:
         for step in plan.steps:
-            if step.action != "scene.turn_on":
+            if step.action == "scene.turn_on":
+                scene_entity = step.params.get("entity_id")
+                if not isinstance(scene_entity, str) or not scene_entity.startswith("scene."):
+                    continue
+
+                if self._hass.states.get(scene_entity) is None:
+                    _LOGGER.warning("Skipping missing scene entity: %s", scene_entity)
+                    continue
+
+                await self._hass.services.async_call(
+                    "scene",
+                    "turn_on",
+                    {"entity_id": scene_entity},
+                    blocking=False,
+                )
+                self._mark_scene_applied(step.target, scene_entity)
                 continue
 
-            scene_entity = step.params.get("entity_id")
-            if not isinstance(scene_entity, str) or not scene_entity.startswith("scene."):
+            if step.action == "light.turn_off":
+                area_id = step.params.get("area_id")
+                if not isinstance(area_id, str) or not area_id:
+                    continue
+                await self._hass.services.async_call(
+                    "light",
+                    "turn_off",
+                    {"area_id": area_id},
+                    blocking=False,
+                )
+                self._mark_scene_applied(step.target, f"light.turn_off:area:{area_id}")
                 continue
-
-            if self._hass.states.get(scene_entity) is None:
-                _LOGGER.warning("Skipping missing scene entity: %s", scene_entity)
-                continue
-
-            await self._hass.services.async_call(
-                "scene",
-                "turn_on",
-                {"entity_id": scene_entity},
-                blocking=False,
-            )
-            self._mark_scene_applied(step.target, scene_entity)
 
     def _should_apply_scene(self, room_id: str, scene_entity: str) -> bool:
         now = time.monotonic()
@@ -479,6 +523,15 @@ class HeimaEngine:
             if room_id:
                 mappings[str(room_id)] = dict(room_map)
         return mappings
+
+    def _room_configs(self) -> dict[str, dict[str, Any]]:
+        options = dict(self._entry.options)
+        configs: dict[str, dict[str, Any]] = {}
+        for room in options.get(OPT_ROOMS, []):
+            room_id = room.get("room_id")
+            if room_id:
+                configs[str(room_id)] = dict(room)
+        return configs
 
     def _queue_event(self, event: HeimaEvent) -> None:
         self._pending_events.append(event)
