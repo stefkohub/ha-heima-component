@@ -297,8 +297,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
         slug = user_input.get("person")
         self._editing_person_slug = slug
-        selected = self._find_by_key(people, "slug", slug) or {}
-        return await self.async_step_people_edit_form(selected)
+        return await self.async_step_people_edit_form()
 
     async def async_step_people_edit_form(self, user_input=None) -> FlowResult:
         _LOGGER.debug("Options flow: people_edit_form user_input=%s", bool(user_input))
@@ -504,8 +503,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
         room_id = user_input.get("room")
         self._editing_room_id = room_id
-        selected = self._find_by_key(rooms, "room_id", room_id) or {}
-        return await self.async_step_rooms_edit_form(selected)
+        return await self.async_step_rooms_edit_form()
 
     async def async_step_rooms_edit_form(self, user_input=None) -> FlowResult:
         rooms = self._rooms()
@@ -658,10 +656,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
             return self.async_show_form(step_id="lighting_rooms_edit", data_schema=schema)
 
         self._editing_lighting_room_id = user_input.get("room")
-        existing = self._find_by_key(
-            self._lighting_rooms(), "room_id", self._editing_lighting_room_id
-        ) or {"room_id": self._editing_lighting_room_id}
-        return await self.async_step_lighting_rooms_edit_form(existing)
+        return await self.async_step_lighting_rooms_edit_form()
 
     async def async_step_lighting_rooms_edit_form(self, user_input=None) -> FlowResult:
         if user_input is None:
@@ -789,8 +784,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
         zone_id = user_input.get("zone")
         self._editing_zone_id = zone_id
-        selected = self._find_by_key(zones, "zone_id", zone_id) or {}
-        return await self.async_step_lighting_zones_edit_form(selected)
+        return await self.async_step_lighting_zones_edit_form()
 
     async def async_step_lighting_zones_edit_form(self, user_input=None) -> FlowResult:
         zones = self._lighting_zones()
