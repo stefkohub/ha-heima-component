@@ -693,22 +693,21 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
     def _lighting_room_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
         defaults = defaults or {}
-        return vol.Schema(
+        schema = vol.Schema(
             {
                 vol.Required("room_id", default=defaults.get("room_id", "")): cv.string,
-                vol.Optional("scene_evening", default=defaults.get("scene_evening")):
-                _scene_selector(),
-                vol.Optional("scene_relax", default=defaults.get("scene_relax")):
-                _scene_selector(),
-                vol.Optional("scene_night", default=defaults.get("scene_night")):
-                _scene_selector(),
-                vol.Optional("scene_off", default=defaults.get("scene_off")):
-                _scene_selector(),
+                # No defaults on optional selector fields: using defaults here makes it
+                # impossible to clear a scene, because the schema fills the old value back in.
+                vol.Optional("scene_evening"): _scene_selector(),
+                vol.Optional("scene_relax"): _scene_selector(),
+                vol.Optional("scene_night"): _scene_selector(),
+                vol.Optional("scene_off"): _scene_selector(),
                 vol.Optional(
                     "enable_manual_hold", default=defaults.get("enable_manual_hold", True)
                 ): bool,
             }
         )
+        return self.add_suggested_values_to_schema(schema, defaults)
 
     def _validate_lighting_room_payload(self, payload: dict[str, Any]) -> dict[str, str]:
         errors: dict[str, str] = {}
