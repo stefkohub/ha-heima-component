@@ -27,7 +27,7 @@ from ..const import (
 from ..entities.registry import build_registry
 from ..models import HeimaOptions
 from .contracts import ApplyPlan, ApplyStep, HeimaEvent
-from .lighting import pick_scene_for_intent, resolve_zone_intent
+from .lighting import pick_scene_for_intent_with_trace, resolve_zone_intent
 from .notifications import HeimaEventPipeline
 from .policy import resolve_house_state
 from .snapshot import DecisionSnapshot
@@ -78,6 +78,9 @@ class HeimaEngine:
         self._lighting_last_scene: dict[str, str] = {}
         self._lighting_last_ts: dict[str, float] = {}
         self._lighting_hold_seen_state: dict[str, bool] = {}
+        self._lighting_zone_trace: dict[str, dict[str, Any]] = {}
+        self._lighting_room_trace: dict[str, list[dict[str, Any]]] = {}
+        self._lighting_conflicts_last_eval: list[dict[str, Any]] = []
         self._events = HeimaEventPipeline(hass)
         self._pending_events: list[HeimaEvent] = []
 
@@ -314,6 +317,7 @@ class HeimaEngine:
         options = dict(self._entry.options)
         occupied = set(occupied_rooms)
         lighting_intents: dict[str, str] = {}
+        zone_trace: dict[str, dict[str, Any]] = {}
 
         for zone in options.get(OPT_LIGHTING_ZONES, []):
             zone_id = zone.get("zone_id")
@@ -326,24 +330,57 @@ class HeimaEngine:
             requested_intent = self._state.get_select(select_key) or "auto"
             final_intent = resolve_zone_intent(requested_intent, house_state, zone_occupied)
             lighting_intents[zone_id] = final_intent
+            zone_trace[str(zone_id)] = {
+                "zone_id": str(zone_id),
+                "rooms": rooms,
+                "zone_occupied": zone_occupied,
+                "requested_intent": requested_intent,
+                "final_intent": final_intent,
+                "house_state": house_state,
+            }
 
+        self._lighting_zone_trace = zone_trace
         return lighting_intents
 
     def _build_apply_plan(self, snapshot: DecisionSnapshot) -> ApplyPlan:
         room_maps = self._lighting_room_maps()
         steps: list[ApplyStep] = []
+        room_trace: dict[str, list[dict[str, Any]]] = {}
+        room_plan_counts: dict[str, int] = {}
+        conflicts: list[dict[str, Any]] = []
 
         for zone_id, intent in snapshot.lighting_intents.items():
             for room_id in self._zone_rooms(zone_id):
+                decision: dict[str, Any] = {
+                    "zone_id": zone_id,
+                    "room_id": room_id,
+                    "intent": intent,
+                    "hold": False,
+                    "room_mapping_found": False,
+                    "scene_entity": None,
+                    "scene_resolution": None,
+                    "apply_queued": False,
+                    "skip_reason": None,
+                }
                 if self._is_lighting_room_hold_on(room_id):
+                    decision["hold"] = True
+                    decision["skip_reason"] = "manual_hold"
+                    room_trace.setdefault(room_id, []).append(decision)
                     continue
 
                 room_map = room_maps.get(room_id)
                 if not room_map:
+                    decision["skip_reason"] = "no_room_mapping"
+                    room_trace.setdefault(room_id, []).append(decision)
                     continue
+                decision["room_mapping_found"] = True
 
-                scene_entity = pick_scene_for_intent(room_map, intent)
+                scene_entity, scene_resolution = pick_scene_for_intent_with_trace(room_map, intent)
+                decision["scene_entity"] = scene_entity
+                decision["scene_resolution"] = scene_resolution
                 if not scene_entity:
+                    decision["skip_reason"] = "scene_missing"
+                    room_trace.setdefault(room_id, []).append(decision)
                     self._queue_event(
                         HeimaEvent(
                             type="lighting.scene_missing",
@@ -360,8 +397,31 @@ class HeimaEngine:
                     continue
 
                 if not self._should_apply_scene(room_id, scene_entity):
+                    decision["skip_reason"] = "rate_limited_or_duplicate"
+                    room_trace.setdefault(room_id, []).append(decision)
                     continue
 
+                if room_plan_counts.get(room_id, 0) >= 1:
+                    conflict = {
+                        "room_id": room_id,
+                        "zone_id": zone_id,
+                        "scene_entity": scene_entity,
+                        "intent": intent,
+                        "note": "multiple zones queued scenes for the same room in one evaluation",
+                    }
+                    conflicts.append(conflict)
+                    _LOGGER.warning(
+                        "Lighting room '%s' targeted by multiple zones in one evaluation (latest zone=%s, intent=%s, scene=%s)",
+                        room_id,
+                        zone_id,
+                        intent,
+                        scene_entity,
+                    )
+                    decision["conflict"] = dict(conflict)
+
+                decision["apply_queued"] = True
+                room_plan_counts[room_id] = room_plan_counts.get(room_id, 0) + 1
+                room_trace.setdefault(room_id, []).append(decision)
                 steps.append(
                     ApplyStep(
                         domain="lighting",
@@ -372,6 +432,8 @@ class HeimaEngine:
                     )
                 )
 
+        self._lighting_room_trace = room_trace
+        self._lighting_conflicts_last_eval = conflicts
         return ApplyPlan(steps=steps)
 
     async def _execute_apply_plan(self, plan: ApplyPlan) -> None:
@@ -610,6 +672,9 @@ class HeimaEngine:
                 ],
             },
             "lighting": {
+                "zone_trace": dict(self._lighting_zone_trace),
+                "room_trace": {room_id: list(items) for room_id, items in self._lighting_room_trace.items()},
+                "conflicts_last_eval": list(self._lighting_conflicts_last_eval),
                 "last_scene_by_room": dict(self._lighting_last_scene),
                 "last_apply_ts_by_room": dict(self._lighting_last_ts),
                 "hold_seen_state_by_room": dict(self._lighting_hold_seen_state),

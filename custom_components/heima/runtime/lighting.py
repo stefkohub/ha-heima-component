@@ -41,23 +41,36 @@ def resolve_zone_intent(requested_intent: str | None, house_state: str, zone_occ
 
 def pick_scene_for_intent(room_map: dict[str, Any], intent: str) -> str | None:
     """Select scene id for intent using v1 fallback rules."""
+    scene, _ = pick_scene_for_intent_with_trace(room_map, intent)
+    return scene
+
+
+def pick_scene_for_intent_with_trace(room_map: dict[str, Any], intent: str) -> tuple[str | None, str]:
+    """Select scene id and return how it was resolved (direct/fallback/missing)."""
     direct = _scene(room_map, intent)
     if direct:
-        return direct
+        return direct, f"direct:{intent}"
 
     if intent == "scene_relax":
-        return _scene(room_map, "scene_evening")
+        scene = _scene(room_map, "scene_evening")
+        return scene, "fallback:scene_relax->scene_evening" if scene else "missing"
 
     if intent == "scene_evening":
-        return _scene(room_map, "scene_relax")
+        scene = _scene(room_map, "scene_relax")
+        return scene, "fallback:scene_evening->scene_relax" if scene else "missing"
 
     if intent == "scene_night":
-        return _scene(room_map, "scene_evening") or _scene(room_map, "off")
+        scene = _scene(room_map, "scene_evening")
+        if scene:
+            return scene, "fallback:scene_night->scene_evening"
+        scene = _scene(room_map, "off")
+        return scene, "fallback:scene_night->off" if scene else "missing"
 
     if intent == "off":
-        return _scene(room_map, "off")
+        scene = _scene(room_map, "off")
+        return scene, "direct:off" if scene else "missing"
 
-    return None
+    return None, "missing"
 
 
 def _scene(room_map: dict[str, Any], intent: str) -> str | None:
