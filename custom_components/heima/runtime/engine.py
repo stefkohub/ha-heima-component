@@ -451,7 +451,25 @@ class HeimaEngine:
             last_event = stats.get("last_event") or {}
             self._state.set_sensor("heima_last_event", str(last_event.get("type", "")))
         if "heima_event_stats" in self._state.sensors:
-            self._state.set_sensor("heima_event_stats", json.dumps(stats, sort_keys=True))
+            last_event = stats.get("last_event") or {}
+            summary = (
+                f"emitted={stats.get('emitted', 0)} "
+                f"dedup={stats.get('dropped_dedup', 0)} "
+                f"rate={stats.get('dropped_rate_limited', 0)} "
+                f"last={last_event.get('type', '')}"
+            ).strip()
+            self._state.set_sensor("heima_event_stats", summary[:255])
+            self._state.set_sensor_attributes(
+                "heima_event_stats",
+                {
+                    "emitted": stats.get("emitted", 0),
+                    "dropped_dedup": stats.get("dropped_dedup", 0),
+                    "dropped_rate_limited": stats.get("dropped_rate_limited", 0),
+                    "suppressed_by_key": stats.get("suppressed_by_key", {}),
+                    "last_event": last_event,
+                    "raw_json": json.dumps(stats, sort_keys=True),
+                },
+            )
 
     def _lighting_apply_mode(self) -> str:
         mode = str(

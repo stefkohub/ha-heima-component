@@ -12,6 +12,7 @@ class CanonicalState:
 
     binary_sensors: dict[str, bool | None] = field(default_factory=dict)
     sensors: dict[str, Any] = field(default_factory=dict)
+    sensor_attributes: dict[str, dict[str, Any]] = field(default_factory=dict)
     selects: dict[str, str | None] = field(default_factory=dict)
 
     def get_binary(self, key: str) -> bool | None:
@@ -23,11 +24,21 @@ class CanonicalState:
     def get_select(self, key: str) -> str | None:
         return self.selects.get(key)
 
+    def get_sensor_attributes(self, key: str) -> dict[str, Any] | None:
+        attrs = self.sensor_attributes.get(key)
+        return dict(attrs) if attrs is not None else None
+
     def set_binary(self, key: str, value: bool | None) -> None:
         self.binary_sensors[key] = value
 
     def set_sensor(self, key: str, value: Any) -> None:
         self.sensors[key] = value
+
+    def set_sensor_attributes(self, key: str, value: dict[str, Any] | None) -> None:
+        if value is None:
+            self.sensor_attributes.pop(key, None)
+            return
+        self.sensor_attributes[key] = dict(value)
 
     def set_select(self, key: str, value: str) -> None:
         self.selects[key] = value

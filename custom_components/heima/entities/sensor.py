@@ -37,3 +37,7 @@ class HeimaGenericSensor(HeimaEntity, SensorEntity):
     @property
     def native_value(self):
         return self.coordinator.engine.state.get_sensor(self._key)
+
+    @property
+    def extra_state_attributes(self):
+        return self.coordinator.engine.state.get_sensor_attributes(self._key)

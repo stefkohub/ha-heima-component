@@ -221,6 +221,8 @@ cards:
   - type: markdown
     content: |
       ### Notes
-      - `sensor.heima_event_stats` contains JSON with event pipeline counters (emitted, dedup drops, rate-limit drops, last event).
+      - `sensor.heima_event_stats` state is a compact summary (HA sensors have a 255-char state limit).
+      - Full event pipeline counters/details are exposed in `sensor.heima_event_stats` attributes (`last_event`, suppression counters, `raw_json`).
+      - Repeated presses of `Notify Test Event` may be suppressed by Heima dedup/rate-limit if the key is unchanged.
       - If `lighting_apply_mode` is `delegate`, intents and events still update but `scene.turn_on` is not called.
       - Replace placeholder ids (`living_zone`, `living_room`, `bedroom`, `stefano`) with your actual configured ids.
