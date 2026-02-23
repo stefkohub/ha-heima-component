@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from ..const import (
     OPT_LIGHTING_APPLY_MODE,
     OPT_LIGHTING_ROOMS,
     OPT_LIGHTING_ZONES,
+    OPT_NOTIFICATIONS,
     OPT_PEOPLE_ANON,
     OPT_PEOPLE_NAMED,
     OPT_ROOMS,
@@ -24,8 +26,9 @@ from ..const import (
 )
 from ..entities.registry import build_registry
 from ..models import HeimaOptions
-from .contracts import ApplyPlan, ApplyStep
+from .contracts import ApplyPlan, ApplyStep, HeimaEvent
 from .lighting import pick_scene_for_intent, resolve_zone_intent
+from .notifications import HeimaEventPipeline
 from .policy import resolve_house_state
 from .snapshot import DecisionSnapshot
 from .state_store import CanonicalState
@@ -74,6 +77,9 @@ class HeimaEngine:
         self._apply_plan = ApplyPlan.empty()
         self._lighting_last_scene: dict[str, str] = {}
         self._lighting_last_ts: dict[str, float] = {}
+        self._lighting_hold_seen_state: dict[str, bool] = {}
+        self._events = HeimaEventPipeline(hass)
+        self._pending_events: list[HeimaEvent] = []
 
     @property
     def health(self) -> EngineHealth:
@@ -114,6 +120,8 @@ class HeimaEngine:
 
         plan = self._build_apply_plan(snapshot)
         self._apply_plan = plan
+        await self._emit_lighting_hold_events()
+        await self._emit_queued_events()
 
         if self._options.engine_enabled and self._lighting_apply_mode() == "scene":
             await self._execute_apply_plan(plan)
@@ -312,6 +320,19 @@ class HeimaEngine:
 
                 scene_entity = pick_scene_for_intent(room_map, intent)
                 if not scene_entity:
+                    self._queue_event(
+                        HeimaEvent(
+                            type="lighting.scene_missing",
+                            key=f"lighting.scene_missing.{room_id}.{intent}",
+                            severity="warn",
+                            title="Lighting scene missing",
+                            message=(
+                                f"No mapped scene for room '{room_id}' "
+                                f"and intent '{intent}'"
+                            ),
+                            context={"room": room_id, "intent": intent},
+                        )
+                    )
                     continue
 
                 if not self._should_apply_scene(room_id, scene_entity):
@@ -373,6 +394,41 @@ class HeimaEngine:
                 mappings[str(room_id)] = dict(room_map)
         return mappings
 
+    def _queue_event(self, event: HeimaEvent) -> None:
+        self._pending_events.append(event)
+
+    async def _emit_queued_events(self) -> None:
+        if not self._pending_events:
+            self._sync_event_sensors()
+            return
+
+        queued = list(self._pending_events)
+        self._pending_events.clear()
+        for event in queued:
+            await self._emit_event_obj(event)
+
+        self._sync_event_sensors()
+
+    async def _emit_event_obj(self, event: HeimaEvent) -> bool:
+        notifications_cfg = self._notifications_config()
+        return await self._events.async_emit(
+            event,
+            routes=list(notifications_cfg.get("routes", [])),
+            dedup_window_s=int(notifications_cfg.get("dedup_window_s", 60)),
+            rate_limit_per_key_s=int(notifications_cfg.get("rate_limit_per_key_s", 300)),
+        )
+
+    def _notifications_config(self) -> dict[str, Any]:
+        return dict(dict(self._entry.options).get(OPT_NOTIFICATIONS, {}))
+
+    def _sync_event_sensors(self) -> None:
+        stats = self._events.stats.as_dict()
+        if "heima_last_event" in self._state.sensors:
+            last_event = stats.get("last_event") or {}
+            self._state.set_sensor("heima_last_event", str(last_event.get("type", "")))
+        if "heima_event_stats" in self._state.sensors:
+            self._state.set_sensor("heima_event_stats", json.dumps(stats, sort_keys=True))
+
     def _lighting_apply_mode(self) -> str:
         mode = str(
             dict(self._entry.options).get(OPT_LIGHTING_APPLY_MODE, DEFAULT_LIGHTING_APPLY_MODE)
@@ -385,6 +441,35 @@ class HeimaEngine:
         key = f"heima_lighting_manual_hold_{room_id}"
         value = self._state.get_binary(key)
         return bool(value)
+
+    async def _emit_lighting_hold_events(self) -> None:
+        for room_id, room_map in self._lighting_room_maps().items():
+            if not room_map.get("enable_manual_hold", True):
+                continue
+
+            current = self._is_lighting_room_hold_on(room_id)
+            if room_id not in self._lighting_hold_seen_state:
+                self._lighting_hold_seen_state[room_id] = current
+                continue
+
+            previous = self._lighting_hold_seen_state[room_id]
+            if previous == current:
+                continue
+
+            self._lighting_hold_seen_state[room_id] = current
+            self._queue_event(
+                HeimaEvent(
+                    type="lighting.hold_on" if current else "lighting.hold_off",
+                    key=f"lighting.hold.{room_id}",
+                    severity="info",
+                    title="Lighting hold enabled" if current else "Lighting hold disabled",
+                    message=(
+                        f"Manual lighting hold {'enabled' if current else 'disabled'} "
+                        f"for room '{room_id}'"
+                    ),
+                    context={"room": room_id},
+                )
+            )
 
     def _compute_named_person_presence(self, person_cfg: dict[str, Any]) -> tuple[bool, str, int]:
         method = person_cfg.get("presence_method", "ha_person")
@@ -465,3 +550,27 @@ class HeimaEngine:
             if zone.get("zone_id") == zone_id:
                 return list(zone.get("rooms", []))
         return []
+
+    def diagnostics(self) -> dict[str, Any]:
+        return {
+            "snapshot": self._snapshot.as_dict(),
+            "apply_plan": {
+                "plan_id": self._apply_plan.plan_id,
+                "steps": [
+                    {
+                        "domain": step.domain,
+                        "target": step.target,
+                        "action": step.action,
+                        "params": dict(step.params),
+                        "reason": step.reason,
+                    }
+                    for step in self._apply_plan.steps
+                ],
+            },
+            "lighting": {
+                "last_scene_by_room": dict(self._lighting_last_scene),
+                "last_apply_ts_by_room": dict(self._lighting_last_ts),
+                "hold_seen_state_by_room": dict(self._lighting_hold_seen_state),
+            },
+            "events": self._events.stats.as_dict(),
+        }

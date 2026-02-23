@@ -2,8 +2,9 @@
 
 ## Status Overview
 - Completed: `Phase 0`, `Phase 1`
-- In Progress: `Phase 2` (lighting policy/mapping/apply core implemented)
-- Next: finalize `Phase 2` events and diagnostics details
+- Completed: `Phase 2`
+- In Progress: `Phase 3` (notification pipeline base implemented)
+- Next: complete Phase 3 routing/event catalog coverage and integration
 
 ## 8-Phase Roadmap
 
@@ -18,7 +19,7 @@
 - Update canonical entities continuously through `CanonicalState`.
 - Wire state-change triggers to coordinator refresh (`DataUpdateCoordinator`).
 
-3. [ ] Phase 2 — Lighting Domain (Policy + Mapping + Apply)
+3. [x] Phase 2 — Lighting Domain (Policy + Mapping + Apply)
 - Implement base policy (house_state + occupancy) and room-scene mapping.
 - Support per-room manual hold and scene fallback.
 - Add idempotent/rate-limited apply per room.
