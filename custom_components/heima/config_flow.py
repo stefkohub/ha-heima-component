@@ -139,6 +139,10 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
     def _store_list(self, key: str, items: list[dict[str, Any]]) -> None:
         self.options[key] = items
 
+    def _with_suggested(self, schema: vol.Schema, defaults: dict[str, Any] | None) -> vol.Schema:
+        """Populate form values without turning optional cleared fields into sticky defaults."""
+        return self.add_suggested_values_to_schema(schema, defaults or {})
+
     def _normalize_multi_value(self, value: Any) -> list[str]:
         """Normalize selector/cv.multi_select outputs to a stable list[str]."""
         if value is None:
@@ -344,23 +348,10 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
         current = dict(self.options.get(OPT_PEOPLE_ANON, {}))
         if user_input is None:
-            schema = vol.Schema(
-                {
-                    vol.Optional("enabled", default=current.get("enabled", False)): bool,
-                    vol.Optional("sources", default=current.get("sources", [])): _entity_selector(
-                        ["binary_sensor", "sensor", "device_tracker"], multiple=True
-                    ),
-                    vol.Optional("required", default=current.get("required", 1)): cv.positive_int,
-                    vol.Optional(
-                        "anonymous_count_weight", default=current.get("anonymous_count_weight", 1)
-                    ): cv.positive_int,
-                    vol.Optional("arrive_hold_s", default=current.get("arrive_hold_s", 10)):
-                    cv.positive_int,
-                    vol.Optional("leave_hold_s", default=current.get("leave_hold_s", 120)):
-                    cv.positive_int,
-                }
+            return self.async_show_form(
+                step_id="people_anonymous",
+                data_schema=self._people_anonymous_schema(current),
             )
-            return self.async_show_form(step_id="people_anonymous", data_schema=schema)
 
         user_input = dict(user_input)
         user_input["sources"] = self._normalize_multi_value(user_input.get("sources"))
@@ -375,25 +366,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         if errors:
             return self.async_show_form(
                 step_id="people_anonymous",
-                data_schema=vol.Schema(
-                    {
-                        vol.Optional("enabled", default=user_input.get("enabled", False)): bool,
-                        vol.Optional("sources", default=sources): _entity_selector(
-                            ["binary_sensor", "sensor", "device_tracker"], multiple=True
-                        ),
-                        vol.Optional("required", default=required): cv.positive_int,
-                        vol.Optional(
-                            "anonymous_count_weight",
-                            default=user_input.get("anonymous_count_weight", 1),
-                        ): cv.positive_int,
-                        vol.Optional(
-                            "arrive_hold_s", default=user_input.get("arrive_hold_s", 10)
-                        ): cv.positive_int,
-                        vol.Optional(
-                            "leave_hold_s", default=user_input.get("leave_hold_s", 120)
-                        ): cv.positive_int,
-                    }
-                ),
+                data_schema=self._people_anonymous_schema(user_input),
                 errors=errors,
             )
 
@@ -409,7 +382,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
     def _people_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
         defaults = defaults or {}
-        return vol.Schema(
+        schema = vol.Schema(
             {
                 vol.Required("slug", default=defaults.get("slug", "")): cv.string,
                 vol.Optional("display_name", default=defaults.get("display_name", "")):
@@ -417,10 +390,10 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Required(
                     "presence_method", default=defaults.get("presence_method", "ha_person")
                 ): vol.In(PRESENCE_METHODS),
-                vol.Optional("person_entity", default=defaults.get("person_entity")):
-                _entity_selector(["person"]),
-                vol.Optional("sources", default=defaults.get("sources", [])):
-                _entity_selector(["binary_sensor", "sensor", "device_tracker"], multiple=True),
+                vol.Optional("person_entity"): _entity_selector(["person"]),
+                vol.Optional("sources"): _entity_selector(
+                    ["binary_sensor", "sensor", "device_tracker"], multiple=True
+                ),
                 vol.Optional("required", default=defaults.get("required", 1)): cv.positive_int,
                 vol.Optional("arrive_hold_s", default=defaults.get("arrive_hold_s", 10)):
                 cv.positive_int,
@@ -429,6 +402,27 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional("enable_override", default=defaults.get("enable_override", False)): bool,
             }
         )
+        return self._with_suggested(schema, defaults)
+
+    def _people_anonymous_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
+        defaults = defaults or {}
+        schema = vol.Schema(
+            {
+                vol.Optional("enabled", default=defaults.get("enabled", False)): bool,
+                vol.Optional("sources"): _entity_selector(
+                    ["binary_sensor", "sensor", "device_tracker"], multiple=True
+                ),
+                vol.Optional("required", default=defaults.get("required", 1)): cv.positive_int,
+                vol.Optional(
+                    "anonymous_count_weight", default=defaults.get("anonymous_count_weight", 1)
+                ): cv.positive_int,
+                vol.Optional("arrive_hold_s", default=defaults.get("arrive_hold_s", 10)):
+                cv.positive_int,
+                vol.Optional("leave_hold_s", default=defaults.get("leave_hold_s", 120)):
+                cv.positive_int,
+            }
+        )
+        return self._with_suggested(schema, defaults)
 
     def _validate_people_payload(self, payload: dict[str, Any], is_edit: bool) -> dict[str, str]:
         errors: dict[str, str] = {}
@@ -585,14 +579,13 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
     def _room_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
         defaults = defaults or {}
-        return vol.Schema(
+        schema = vol.Schema(
             {
                 vol.Required("room_id", default=defaults.get("room_id", "")): cv.string,
                 vol.Optional("display_name", default=defaults.get("display_name", "")):
                 cv.string,
-                vol.Optional("area_id", default=defaults.get("area_id")): selector({"area": {}}),
-                vol.Required("sources", default=defaults.get("sources", [])):
-                _entity_selector(["binary_sensor", "sensor"], multiple=True),
+                vol.Optional("area_id"): selector({"area": {}}),
+                vol.Required("sources"): _entity_selector(["binary_sensor", "sensor"], multiple=True),
                 vol.Required("logic", default=defaults.get("logic", "any_of")): vol.In(ROOM_LOGIC),
                 vol.Optional("on_dwell_s", default=defaults.get("on_dwell_s", 5)): cv.positive_int,
                 vol.Optional("off_dwell_s", default=defaults.get("off_dwell_s", 120)): cv.positive_int,
@@ -600,6 +593,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Any(None, cv.positive_int),
             }
         )
+        return self._with_suggested(schema, defaults)
 
     def _validate_room_payload(self, payload: dict[str, Any], is_edit: bool) -> dict[str, str]:
         errors: dict[str, str] = {}
@@ -707,7 +701,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 ): bool,
             }
         )
-        return self.add_suggested_values_to_schema(schema, defaults)
+        return self._with_suggested(schema, defaults)
 
     def _validate_lighting_room_payload(self, payload: dict[str, Any]) -> dict[str, str]:
         errors: dict[str, str] = {}
@@ -830,15 +824,15 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
     def _lighting_zone_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
         defaults = defaults or {}
-        return vol.Schema(
+        schema = vol.Schema(
             {
                 vol.Required("zone_id", default=defaults.get("zone_id", "")): cv.string,
                 vol.Optional("display_name", default=defaults.get("display_name", "")):
                 cv.string,
-                vol.Required("rooms", default=defaults.get("rooms", [])):
-                cv.multi_select(self._room_ids()),
+                vol.Required("rooms"): cv.multi_select(self._room_ids()),
             }
         )
+        return self._with_suggested(schema, defaults)
 
     def _validate_lighting_zone_payload(self, payload: dict[str, Any], is_edit: bool) -> dict[str, str]:
         errors: dict[str, str] = {}
@@ -883,34 +877,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_heating(self, user_input=None) -> FlowResult:
         current = dict(self.options.get(OPT_HEATING, {}))
         if user_input is None:
-            schema = vol.Schema(
-                {
-                    vol.Optional("climate_entity", default=current.get("climate_entity")):
-                    _entity_selector(["climate"]),
-                    vol.Required(
-                        "apply_mode_auto",
-                        default=current.get("apply_mode_auto", "delegate_to_scheduler"),
-                    ): vol.In(HEATING_APPLY_MODES),
-                    vol.Optional("setpoint_eco", default=current.get("setpoint_eco", 18.0)):
-                    vol.Coerce(float),
-                    vol.Optional(
-                        "setpoint_comfort", default=current.get("setpoint_comfort", 20.0)
-                    ): vol.Coerce(float),
-                    vol.Optional(
-                        "setpoint_preheat", default=current.get("setpoint_preheat", 21.5)
-                    ): vol.Coerce(float),
-                    vol.Optional(
-                        "min_seconds_between_commands",
-                        default=current.get("min_seconds_between_commands", 120),
-                    ): cv.positive_int,
-                    vol.Optional(
-                        "verify_after_s", default=current.get("verify_after_s", 15)
-                    ): cv.positive_int,
-                    vol.Optional("max_retries", default=current.get("max_retries", 2)):
-                    cv.positive_int,
-                }
-            )
-            return self.async_show_form(step_id="heating", data_schema=schema)
+            return self.async_show_form(step_id="heating", data_schema=self._heating_schema(current))
 
         if user_input.get("apply_mode_auto") == "set_temperature" and not user_input.get("climate_entity"):
             return self.async_show_form(
@@ -923,10 +890,9 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         return await self.async_step_security()
 
     def _heating_schema(self, defaults: dict[str, Any]) -> vol.Schema:
-        return vol.Schema(
+        schema = vol.Schema(
             {
-                vol.Optional("climate_entity", default=defaults.get("climate_entity")):
-                _entity_selector(["climate"]),
+                vol.Optional("climate_entity"): _entity_selector(["climate"]),
                 vol.Required(
                     "apply_mode_auto",
                     default=defaults.get("apply_mode_auto", "delegate_to_scheduler"),
@@ -950,25 +916,13 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 cv.positive_int,
             }
         )
+        return self._with_suggested(schema, defaults)
 
     # ---- Security ----
     async def async_step_security(self, user_input=None) -> FlowResult:
         current = dict(self.options.get(OPT_SECURITY, {}))
         if user_input is None:
-            schema = vol.Schema(
-                {
-                    vol.Optional("enabled", default=current.get("enabled", False)): bool,
-                    vol.Optional("security_state_entity", default=current.get("security_state_entity")):
-                    _entity_selector(["alarm_control_panel", "sensor", "binary_sensor"]),
-                    vol.Optional(
-                        "armed_away_value", default=current.get("armed_away_value", "armed_away")
-                    ): cv.string,
-                    vol.Optional(
-                        "armed_home_value", default=current.get("armed_home_value", "armed_home")
-                    ): cv.string,
-                }
-            )
-            return self.async_show_form(step_id="security", data_schema=schema)
+            return self.async_show_form(step_id="security", data_schema=self._security_schema(current))
 
         if user_input.get("enabled") and not user_input.get("security_state_entity"):
             return self.async_show_form(
@@ -981,11 +935,12 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         return await self.async_step_notifications()
 
     def _security_schema(self, defaults: dict[str, Any]) -> vol.Schema:
-        return vol.Schema(
+        schema = vol.Schema(
             {
                 vol.Optional("enabled", default=defaults.get("enabled", False)): bool,
-                vol.Optional("security_state_entity", default=defaults.get("security_state_entity")):
-                _entity_selector(["alarm_control_panel", "sensor", "binary_sensor"]),
+                vol.Optional("security_state_entity"): _entity_selector(
+                    ["alarm_control_panel", "sensor", "binary_sensor"]
+                ),
                 vol.Optional(
                     "armed_away_value", default=defaults.get("armed_away_value", "armed_away")
                 ): cv.string,
@@ -994,23 +949,15 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 ): cv.string,
             }
         )
+        return self._with_suggested(schema, defaults)
 
     # ---- Notifications ----
     async def async_step_notifications(self, user_input=None) -> FlowResult:
         current = dict(self.options.get(OPT_NOTIFICATIONS, {}))
         if user_input is None:
-            schema = vol.Schema(
-                {
-                    vol.Optional("routes", default=current.get("routes", [])):
-                    cv.multi_select(self._notify_service_choices(current.get("routes", []))),
-                    vol.Optional("dedup_window_s", default=current.get("dedup_window_s", 60)):
-                    _non_negative_int,
-                    vol.Optional(
-                        "rate_limit_per_key_s", default=current.get("rate_limit_per_key_s", 300)
-                    ): _non_negative_int,
-                }
+            return self.async_show_form(
+                step_id="notifications", data_schema=self._notifications_schema(current)
             )
-            return self.async_show_form(step_id="notifications", data_schema=schema)
 
         user_input = self._normalize_notifications_payload(user_input)
         self.options[OPT_NOTIFICATIONS] = user_input
@@ -1023,6 +970,22 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
     def _notify_service_choices(self, selected_routes: Any) -> list[str]:
         routes = self._normalize_multi_value(selected_routes)
         return sorted(set(self._notify_services()) | set(routes))
+
+    def _notifications_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
+        defaults = defaults or {}
+        schema = vol.Schema(
+            {
+                vol.Optional("routes"): cv.multi_select(
+                    self._notify_service_choices(defaults.get("routes", []))
+                ),
+                vol.Optional("dedup_window_s", default=defaults.get("dedup_window_s", 60)):
+                _non_negative_int,
+                vol.Optional(
+                    "rate_limit_per_key_s", default=defaults.get("rate_limit_per_key_s", 300)
+                ): _non_negative_int,
+            }
+        )
+        return self._with_suggested(schema, defaults)
 
     def _finalize_options(self) -> dict[str, Any]:
         """Return a coherent options snapshot before persisting."""
