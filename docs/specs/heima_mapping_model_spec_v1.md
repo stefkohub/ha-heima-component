@@ -13,9 +13,13 @@ Heima uses **Choice B**: *room-based scenes* (no direct light entity control).
 
 ### 0.1 Room
 A **Room** is a logical unit configured in Heima:
-- has occupancy signals
+- may have occupancy signals (optional)
 - has optional manual lighting hold
 - has a mapping from intents to scenes
+
+Room occupancy mode:
+- `derived` (default): occupancy computed from room `sources` + `logic`
+- `none`: room is actuation-only (no local occupancy sensing)
 
 ### 0.2 Zone (Lighting Zone)
 A **Zone** is an aggregation of one or more rooms.
@@ -41,10 +45,12 @@ A Home Assistant scene entity (domain `scene`) that encodes desired state for a 
 Each room has:
 - `room_id` (slug, immutable)
 - `display_name`
+- `area_id` (optional, recommended for fallback actuation)
+- `occupancy_mode` (`derived` | `none`, default `derived`)
 - `manual_hold_enabled` (bool)
 - `scene_map` (dict intent→scene_entity_id)
 
-`scene_map` keys must include at least one of:
+`scene_map` keys are optional and may include any subset of:
 - `scene_evening`
 - `scene_relax`
 - `scene_night`
@@ -70,6 +76,11 @@ If zone intent is `auto`, Heima resolves it to a concrete intent based on house_
 
 (Exact rules owned by lighting policy; mapping consumes final concrete intent.)
 
+Zone occupancy input to lighting policy:
+- computed only from member rooms with `occupancy_mode = derived`
+- member rooms with `occupancy_mode = none` are ignored
+- if all member rooms are `occupancy_mode = none`, `zone_occupied = false`
+
 ### 2.2 Behavior Clamps and Overrides
 Behaviors may return `IntentDelta` with:
 - `override`: force a specific intent
@@ -89,7 +100,9 @@ Heima constructs a per-room plan:
 - for each room R:
   - if `manual_hold(R) == on` → skip room apply
   - else determine scene S = `scene_map(R)[I]` (fallback allowed)
-  - then call `scene.turn_on` for S
+  - if S exists → call `scene.turn_on` for S
+  - if `I == off` and no `off` scene exists and `area_id` exists → fallback `light.turn_off(area_id)`
+  - else skip and emit `lighting.scene_missing` (warn)
 
 This provides **true per-room override** and partial apply.
 
@@ -107,7 +120,9 @@ For each room R and desired intent I:
 4. Else if I is `scene_night`:
    - fallback to `scene_evening` if present, else `off`
 5. Else if I is `off`:
-   - use `off` scene if present, otherwise no-op
+   - use `off` scene if present
+   - otherwise fallback `light.turn_off(area_id)` if room area is known
+   - otherwise no-op
 
 If no usable scene exists:
 - emit event `lighting.scene_missing` (warn)

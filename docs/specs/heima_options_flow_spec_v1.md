@@ -113,19 +113,22 @@ Runtime Effect:
 Fields:
 - `room_id` (slug, immutable)
 - `display_name`
-- `sources` (multi-entity picker)
-- `logic` (enum: `any_of`, `all_of`)
+- `area_id` (HA area picker, optional but recommended for actuation fallback)
+- `occupancy_mode` (enum: `derived`, `none`; default `derived`)
+- `sources` (multi-entity picker, conditional)
+- `logic` (enum: `any_of`, `all_of`, conditional)
 - `on_dwell_s` (int, default 5)
 - `off_dwell_s` (int, default 120)
 - `max_on_s` (int, optional)
 
 Validation:
-- at least one source
+- if `occupancy_mode = derived`: at least one source and `logic` required
+- if `occupancy_mode = none`: `sources` may be empty and `logic` is ignored
 - dwell values >= 0
 
 Runtime Effect:
-- updates OccupancyAdapter
-- recompute room occupancy
+- updates room actuation + occupancy metadata
+- recompute room occupancy only for `occupancy_mode = derived`
 
 ---
 
@@ -135,9 +138,9 @@ Runtime Effect:
 
 Fields:
 - `room_id` (from Rooms)
-- `scene_evening` (scene picker)
-- `scene_relax` (scene picker)
-- `scene_night` (scene picker)
+- `scene_evening` (scene picker or empty)
+- `scene_relax` (scene picker or empty)
+- `scene_night` (scene picker or empty)
 - `scene_off` (scene picker or empty)
 
 Optional:
@@ -145,11 +148,12 @@ Optional:
 
 Validation:
 - scenes must exist
-- at least one scene defined
+- all scenes optional (room may rely on partial mapping or runtime fallback)
 
 Runtime Effect:
 - used by orchestrator for per-room apply
 - creates `binary_sensor.heima_lighting_manual_hold_<room>`
+- when intent is `off` and `scene_off` is empty, runtime may fallback to `light.turn_off` using the room `area_id`
 
 ---
 
@@ -169,6 +173,8 @@ Validation:
 Runtime Effect:
 - lighting policy runs per-zone
 - apply decomposed per-room
+- zone occupancy ignores rooms with `occupancy_mode = none`
+- zone with only `occupancy_mode = none` rooms resolves `zone_occupied = false` in `auto`
 
 ---
 

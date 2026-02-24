@@ -78,6 +78,27 @@ For each zone `<z>`:
 
 Occupancy is **local presence** and is distinct from people presence.
 
+### 3.1 Room Semantics (v1.x clarification)
+A room is a **valid actuation unit** even when it has no occupancy sensors.
+
+Each room may operate in one of two occupancy modes:
+- `derived` (default): occupancy is computed from `sources` + `logic`
+- `none`: no local occupancy sensing for that room
+
+Rules:
+- Rooms with `occupancy_mode = none` are still valid for lighting/heating mappings.
+- `binary_sensor.heima_occ_<r>` remains created and is reported as `off` for `occupancy_mode = none`.
+- `sensor.heima_occ_<r>_source` should indicate `none` (or equivalent diagnostic marker).
+- Rooms with `occupancy_mode = none` do **not** contribute to `occupied_rooms`.
+
+### 3.2 Zone Occupancy Computation (v1.x clarification)
+Lighting zone occupancy is computed from member rooms that have `occupancy_mode = derived`.
+
+Implications:
+- Rooms with `occupancy_mode = none` are ignored for zone occupancy calculation.
+- A zone containing only non-sensorized rooms resolves `zone_occupied = false`.
+- Therefore, in `auto`, a zone with only non-sensorized rooms resolves to lighting intent `off` unless an explicit/manual intent is set.
+
 ---
 
 ## 4. House State Model
@@ -131,6 +152,8 @@ Manual hold is **per room** and blocks apply (not intent computation).
 Apply mechanisms:
 - Preferred: `scene.turn_on`
 - Advanced: `script.turn_on` (optional)
+
+Room-scene mappings are optional per intent. For `off`, if no room `scene_off` is defined and the room has `area_id`, Heima may fallback to `light.turn_off` on the room area.
 
 ---
 
