@@ -38,10 +38,12 @@ Output:
 - House state deterministico.
 - Lighting intent per zone e apply per room con hold.
 - Notification pipeline base con event catalog e rate limit.
+- Hardening UX/config flow per modifiche opzioni e diagnostica lighting.
 
 Output:
 - Ciclo completo di evaluation e apply per lighting.
 - Eventi standard emessi via bus HA.
+- Tracciabilita diagnostica di decisioni lighting (zone/room trace).
 
 ## Milestone 2 - Heating Safe Engine
 - Intenti heating e selettore canonico.
@@ -66,6 +68,11 @@ Output:
 - Implementare flusso opzioni completo secondo spec.
 - Validazioni su entity_id, slug univoci, quorum.
 - Migrazioni config entry v1.x.
+- Stato attuale:
+  - implementato e funzionante
+  - corretti bug di persistenza/edit form
+  - corretta gestione campi selector opzionali clearabili
+  - aggiunto supporto room `occupancy_mode = none`
 
 ### 2. Entita Canoniche
 - Generazione entita per persone, occupancy, house_state.
@@ -76,17 +83,33 @@ Output:
 - Snapshot canonico con stato persone, occupancy e house_state.
 - Decision engine per intent lighting e heating.
 - Debug notes e diagnostica di snapshot.
+- Stato attuale:
+  - people/anonymous/occupancy/house_state implementati
+  - lighting intent/apply v1 implementato
+  - room senza sensori (`occupancy_mode = none`) supportate
+  - zone occupancy calcolata ignorando room non sensorizzate
+  - heating ancora stub (solo entita/config)
 
 ### 4. Orchestratore e Apply
 - Orchestratore unico per apply.
 - Decomposizione zone -> room (scene.turn_on).
 - Anti-loop, dedup e idempotenza per scene.
 - Hold per room e manual override per heating.
+- Stato attuale:
+  - apply lighting integrato nel runtime engine (scene + fallback `light.turn_off(area)`)
+  - idempotenza/rate-limit per room implementati
+  - diagnostica conflitti room-in-piu-zone presente
+  - orchestratore separato non ancora estratto
 
 ### 5. Notification Pipeline
 - Implementare event envelope.
 - Dedup e rate limit per key.
 - Routing su notify.* configurati.
+- Stato attuale:
+  - implementato (bus `heima_event` + routing `notify.*`)
+  - `heima.command notify_event` integrato nel pipeline unificato
+  - sensori `heima_last_event` / `heima_event_stats` aggiornati
+  - manca copertura completa Event Catalog v1
 
 ### 6. Estensioni (Solution A)
 - Eventi: heima_event, heima_snapshot (opzionale), heima_health (opzionale).
@@ -115,6 +138,10 @@ Output:
 - Test integration per Options Flow e servizi.
 - Test di idempotenza apply.
 - Validazione rate limit e dedup eventi.
+- Stato attuale:
+  - test unit + runtime + servizi + flow-style tests presenti
+  - coperti regression bug principali (selector clear, lighting conflicts, notify pipeline)
+  - suite locale: `28 passed`
 
 ## Rischi e Mitigazioni
 - Config incoerente: validazioni strette + eventi system.config_invalid.
@@ -122,10 +149,8 @@ Output:
 - Privacy: redazione contesto eventi e snapshot opzionale.
 
 ## Prossimi Passi Operativi
-1. Implementare scaffolding e modelli dati minimi.
-2. Creare Options Flow con validazioni principali.
-3. Implementare People e Occupancy adapters.
-4. Implementare lighting mapping e orchestratore scene.
-5. Implementare event catalog e notification pipeline.
-6. Implementare heating safe engine.
-7. Integrare Behavior Framework v1.1.
+1. Completare `Phase 3`: espandere Event Catalog e standardizzare payload/eventi per domini.
+2. Implementare `Phase 4` Heating safe engine (apply modes, guard, verify/retry, rate limit).
+3. Rafforzare lighting con policy conflitti zone-room configurabile (`first_wins/priority`).
+4. Introdurre test HA integration-level per Options Flow/ConfigEntry (oltre ai flow-style tests attuali).
+5. Integrare Behavior Framework v1.1.

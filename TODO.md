@@ -3,8 +3,8 @@
 ## Status Overview
 - Completed: `Phase 0`, `Phase 1`
 - Completed: `Phase 2`
-- In Progress: `Phase 3` (notification pipeline base implemented)
-- Next: complete Phase 3 routing/event catalog coverage and integration
+- In Progress: `Phase 3` (notification pipeline/service integration + tests completed; catalog coverage pending)
+- Next: complete Phase 3 event catalog coverage and proceed to Heating (`Phase 4`)
 
 ## 8-Phase Roadmap
 
@@ -26,9 +26,11 @@
 - Emit `lighting.*` events from Event Catalog.
 
 4. [ ] Phase 3 — Notification Domain + Event Catalog
-- Implement `HeimaEvent` pipeline with dedup/rate-limit.
-- Route events to `heima_event` bus and configured `notify.*` services.
-- Extend diagnostics with event stats and recent events.
+- [x] Implement `HeimaEvent` pipeline with dedup/rate-limit.
+- [x] Route events to `heima_event` bus and configured `notify.*` services.
+- [x] Extend diagnostics with event stats and recent events.
+- [x] Wire `heima.command -> notify_event` to unified runtime pipeline (end-to-end).
+- [ ] Expand Event Catalog coverage (`lighting.*`, `heating.*`, `security.*`, `system.*`) and standardize payloads.
 
 5. [ ] Phase 4 — Heating Domain (Safe Apply)
 - Implement base intents (`auto`, `eco`, `comfort`, `preheat`, `off`).
@@ -50,3 +52,22 @@
 - Create canonical watering entities (intent select, hold, telemetry).
 - Implement base policy with lockout and max runtime.
 - Implement Mode A mapping (script-based apply) and watering events.
+
+## Recent Delivered Work (post Phase 2 hardening)
+- Options Flow hardening:
+  - fixed edit-step navigation for people/rooms/lighting rooms/zones
+  - fixed optional selector clearing (scene/entity/routes) using HA suggested values
+  - normalized/finalized options consistently across save paths
+- Lighting diagnostics:
+  - per-zone trace (`requested_intent`, `final_intent`, `zone_occupied`)
+  - per-room trace (scene resolution, skip reason, action)
+  - multi-zone room conflict detection in diagnostics
+- Lighting runtime:
+  - room scene mappings fully optional
+  - `off` fallback to `light.turn_off(area_id)` when `scene_off` missing
+  - support `room.occupancy_mode = none` (actuation-only rooms)
+- Specs updated:
+  - room occupancy modes (`derived|none`)
+  - zone occupancy ignores non-sensorized rooms
+  - lighting `off` fallback semantics
+- Automated tests expanded (now includes flow-like options tests, lighting runtime regressions, notify pipeline end-to-end)
