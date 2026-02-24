@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from custom_components.heima.runtime.engine import HeimaEngine
+from custom_components.heima.runtime.snapshot import DecisionSnapshot
 
 
 class _FakeStateObj:
@@ -144,3 +145,49 @@ async def test_off_without_scene_uses_area_light_turn_off_fallback():
         {"area_id": "soggiorno"},
         False,
     )
+
+
+def test_room_in_multiple_zones_reports_conflict_in_diagnostics():
+    options = {
+        "rooms": [
+            {
+                "room_id": "soggiorno",
+                "area_id": "soggiorno",
+                "occupancy_mode": "derived",
+                "sources": ["binary_sensor.soggiorno_presence"],
+                "logic": "any_of",
+            }
+        ],
+        "lighting_zones": [
+            {"zone_id": "zona_a", "rooms": ["soggiorno"]},
+            {"zone_id": "zona_b", "rooms": ["soggiorno"]},
+        ],
+        "lighting_rooms": [
+            {
+                "room_id": "soggiorno",
+                "scene_evening": "scene.soggiorno_evening",
+                "enable_manual_hold": True,
+            }
+        ],
+    }
+    engine = _build_engine(options)
+    snapshot = DecisionSnapshot(
+        snapshot_id="x",
+        ts="2026-01-01T00:00:00+00:00",
+        house_state="home",
+        anyone_home=True,
+        people_count=1,
+        occupied_rooms=["soggiorno"],
+        lighting_intents={"zona_a": "scene_evening", "zona_b": "scene_evening"},
+        heating_intent="auto",
+        security_state="unknown",
+        notes="test",
+    )
+
+    plan = engine._build_apply_plan(snapshot)
+
+    assert len(plan.steps) == 2
+    diagnostics = engine.diagnostics()
+    conflicts = diagnostics["lighting"]["conflicts_last_eval"]
+    assert len(conflicts) == 1
+    assert conflicts[0]["room_id"] == "soggiorno"
