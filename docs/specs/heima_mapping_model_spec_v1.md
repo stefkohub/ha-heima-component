@@ -169,8 +169,22 @@ A room **may** appear in multiple zones, but v1 recommends:
 - each room belongs to **exactly one lighting zone**
 
 If a room is configured in multiple zones:
-- highest priority zone wins (priority configured or deterministic ordering)
-- Heima emits event `lighting.zone_conflict` (warn) (v1.1 optional)
+- v1.x default conflict policy is `first_wins`
+- "first" means the first **valid apply step** produced for that room in the current evaluation
+- ordering is deterministic and follows:
+  1. zone order in config entry
+  2. room order inside each zone
+- later apply steps for the same room in the same evaluation are dropped
+- Heima emits event `lighting.zone_conflict` (warn)
+
+Conflict event/diagnostics context should include:
+- `room`
+- `winning_zone`, `winning_intent`, `winning_scene`
+- `dropped_zone`, `dropped_intent`, `dropped_scene`
+- `policy` = `first_wins`
+
+Apply plan invariant (v1.x):
+- after conflict resolution, at most **one lighting apply step per room per evaluation**
 
 ---
 

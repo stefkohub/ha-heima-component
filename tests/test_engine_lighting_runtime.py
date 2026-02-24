@@ -221,11 +221,62 @@ def test_room_in_multiple_zones_reports_conflict_in_diagnostics():
 
     plan = engine._build_apply_plan(snapshot)
 
-    assert len(plan.steps) == 2
+    assert len(plan.steps) == 1
+    assert plan.steps[0].params == {"entity_id": "scene.soggiorno_evening"}
     diagnostics = engine.diagnostics()
     conflicts = diagnostics["lighting"]["conflicts_last_eval"]
     assert len(conflicts) == 1
-    assert conflicts[0]["room_id"] == "soggiorno"
+    conflict = conflicts[0]
+    assert conflict["room_id"] == "soggiorno"
+    assert conflict["policy"] == "first_wins"
+    assert conflict["winning_zone"] == "zona_a"
+    assert conflict["dropped_zone"] == "zona_b"
+
+
+def test_conflict_first_valid_step_wins_after_prior_skip():
+    engine = _build_engine(
+        {
+            "rooms": [
+                {
+                    "room_id": "soggiorno",
+                    "area_id": "soggiorno",
+                    "occupancy_mode": "derived",
+                    "sources": ["binary_sensor.soggiorno_presence"],
+                    "logic": "any_of",
+                }
+            ],
+            "lighting_zones": [
+                {"zone_id": "zona_a", "rooms": ["soggiorno"]},
+                {"zone_id": "zona_b", "rooms": ["soggiorno"]},
+            ],
+            "lighting_rooms": [
+                {
+                    "room_id": "soggiorno",
+                    "scene_off": "scene.soggiorno_off",
+                    "enable_manual_hold": True,
+                }
+            ],
+        }
+    )
+    # First zone ('scene_evening') produces no valid step due to missing scene.
+    # Second zone ('off') produces the first valid step and therefore wins.
+    snapshot = DecisionSnapshot(
+        snapshot_id="x",
+        ts="2026-01-01T00:00:00+00:00",
+        house_state="home",
+        anyone_home=True,
+        people_count=1,
+        occupied_rooms=["soggiorno"],
+        lighting_intents={"zona_a": "scene_evening", "zona_b": "off"},
+        heating_intent="auto",
+        security_state="unknown",
+        notes="test",
+    )
+    plan = engine._build_apply_plan(snapshot)
+    assert len(plan.steps) == 1
+    assert plan.steps[0].action == "scene.turn_on"
+    assert plan.steps[0].params == {"entity_id": "scene.soggiorno_off"}
+    assert engine.diagnostics()["lighting"]["conflicts_last_eval"] == []
 
 
 @pytest.mark.asyncio

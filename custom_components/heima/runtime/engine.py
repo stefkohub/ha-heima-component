@@ -405,8 +405,89 @@ class HeimaEngine:
         room_configs = self._room_configs()
         steps: list[ApplyStep] = []
         room_trace: dict[str, list[dict[str, Any]]] = {}
-        room_plan_counts: dict[str, int] = {}
+        room_winner_by_room: dict[str, dict[str, Any]] = {}
         conflicts: list[dict[str, Any]] = []
+
+        def _enqueue_lighting_step(
+            *,
+            room_id: str,
+            zone_id: str,
+            intent: str,
+            action: str,
+            action_params: dict[str, Any],
+            scene_entity: str | None,
+            decision: dict[str, Any],
+            reason: str,
+        ) -> bool:
+            winner = room_winner_by_room.get(room_id)
+            if winner is not None:
+                conflict = {
+                    "room_id": room_id,
+                    "policy": "first_wins",
+                    "winning_zone": winner["zone_id"],
+                    "winning_intent": winner["intent"],
+                    "winning_scene": winner.get("scene_entity"),
+                    "winning_action": winner["action"],
+                    "dropped_zone": zone_id,
+                    "dropped_intent": intent,
+                    "dropped_scene": scene_entity,
+                    "dropped_action": action,
+                }
+                conflicts.append(conflict)
+                decision["skip_reason"] = "zone_conflict_dropped"
+                decision["conflict"] = dict(conflict)
+                room_trace.setdefault(room_id, []).append(decision)
+                self._queue_event(
+                    HeimaEvent(
+                        type="lighting.zone_conflict",
+                        key=f"lighting.zone_conflict.{room_id}",
+                        severity="warn",
+                        title="Lighting zone conflict",
+                        message=(
+                            f"Multiple lighting zones targeted room '{room_id}' "
+                            f"in the same evaluation; first valid step kept."
+                        ),
+                        context={
+                            "room": room_id,
+                            "winning_zone": winner["zone_id"],
+                            "winning_intent": winner["intent"],
+                            "winning_scene": winner.get("scene_entity"),
+                            "dropped_zone": zone_id,
+                            "dropped_intent": intent,
+                            "dropped_scene": scene_entity,
+                            "policy": "first_wins",
+                        },
+                    )
+                )
+                _LOGGER.warning(
+                    "Lighting zone conflict for room '%s': keeping first valid step from zone=%s intent=%s; dropping zone=%s intent=%s",
+                    room_id,
+                    winner["zone_id"],
+                    winner["intent"],
+                    zone_id,
+                    intent,
+                )
+                return False
+
+            decision["apply_queued"] = True
+            room_trace.setdefault(room_id, []).append(decision)
+            room_winner_by_room[room_id] = {
+                "zone_id": zone_id,
+                "intent": intent,
+                "scene_entity": scene_entity,
+                "action": action,
+                "params": dict(action_params),
+            }
+            steps.append(
+                ApplyStep(
+                    domain="lighting",
+                    target=room_id,
+                    action=action,
+                    params=dict(action_params),
+                    reason=reason,
+                )
+            )
+            return True
 
         for zone_id, intent in snapshot.lighting_intents.items():
             for room_id in self._zone_rooms(zone_id):
@@ -459,17 +540,15 @@ class HeimaEngine:
                             decision["scene_resolution"] = "fallback:off->light.turn_off(area)"
                             decision["action"] = "light.turn_off"
                             decision["action_params"] = {"area_id": area_id}
-                            decision["apply_queued"] = True
-                            room_plan_counts[room_id] = room_plan_counts.get(room_id, 0) + 1
-                            room_trace.setdefault(room_id, []).append(decision)
-                            steps.append(
-                                ApplyStep(
-                                    domain="lighting",
-                                    target=room_id,
-                                    action="light.turn_off",
-                                    params={"area_id": area_id},
-                                    reason="intent:off(area_fallback)",
-                                )
+                            _enqueue_lighting_step(
+                                room_id=room_id,
+                                zone_id=zone_id,
+                                intent=intent,
+                                action="light.turn_off",
+                                action_params={"area_id": area_id},
+                                scene_entity=None,
+                                decision=decision,
+                                reason="intent:off(area_fallback)",
                             )
                             continue
 
@@ -495,50 +574,15 @@ class HeimaEngine:
                     room_trace.setdefault(room_id, []).append(decision)
                     continue
 
-                if room_plan_counts.get(room_id, 0) >= 1:
-                    conflict = {
-                        "room_id": room_id,
-                        "zone_id": zone_id,
-                        "scene_entity": scene_entity,
-                        "intent": intent,
-                        "note": "multiple zones queued scenes for the same room in one evaluation",
-                    }
-                    conflicts.append(conflict)
-                    self._queue_event(
-                        HeimaEvent(
-                            type="lighting.zone_conflict",
-                            key=f"lighting.zone_conflict.{room_id}",
-                            severity="warn",
-                            title="Lighting zone conflict",
-                            message=f"Multiple lighting zones targeted room '{room_id}' in the same evaluation.",
-                            context={
-                                "room": room_id,
-                                "zone": zone_id,
-                                "intent": intent,
-                                "scene_entity": scene_entity,
-                            },
-                        )
-                    )
-                    _LOGGER.warning(
-                        "Lighting room '%s' targeted by multiple zones in one evaluation (latest zone=%s, intent=%s, scene=%s)",
-                        room_id,
-                        zone_id,
-                        intent,
-                        scene_entity,
-                    )
-                    decision["conflict"] = dict(conflict)
-
-                decision["apply_queued"] = True
-                room_plan_counts[room_id] = room_plan_counts.get(room_id, 0) + 1
-                room_trace.setdefault(room_id, []).append(decision)
-                steps.append(
-                    ApplyStep(
-                        domain="lighting",
-                        target=room_id,
-                        action="scene.turn_on",
-                        params={"entity_id": scene_entity},
-                        reason=f"intent:{intent}",
-                    )
+                _enqueue_lighting_step(
+                    room_id=room_id,
+                    zone_id=zone_id,
+                    intent=intent,
+                    action="scene.turn_on",
+                    action_params={"entity_id": scene_entity},
+                    scene_entity=scene_entity,
+                    decision=decision,
+                    reason=f"intent:{intent}",
                 )
 
         self._lighting_room_trace = room_trace

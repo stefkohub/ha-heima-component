@@ -151,6 +151,7 @@ Lighting actuation uses **scene-based mapping per room**.
 - Zones aggregate rooms
 - Per-room manual hold blocks apply **only for that room**
 - Zone apply is decomposed into per-room scene activation
+- If a room is targeted by multiple zones in one evaluation, runtime conflict policy `first_wins` applies (deterministic order, warning event + diagnostics)
 
 ### 7.2 Advantages
 - Compatible with existing HA scene setups
