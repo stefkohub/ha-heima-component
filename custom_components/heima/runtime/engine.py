@@ -81,6 +81,7 @@ class HeimaEngine:
         self._lighting_zone_trace: dict[str, dict[str, Any]] = {}
         self._lighting_room_trace: dict[str, list[dict[str, Any]]] = {}
         self._lighting_conflicts_last_eval: list[dict[str, Any]] = []
+        self._last_engine_enabled_state: bool | None = None
         self._events = HeimaEventPipeline(hass)
         self._pending_events: list[HeimaEvent] = []
 
@@ -125,6 +126,21 @@ class HeimaEngine:
         self._apply_plan = plan
         await self._emit_lighting_hold_events()
         await self._emit_queued_events()
+
+        if self._last_engine_enabled_state is None or self._last_engine_enabled_state != self._options.engine_enabled:
+            if not self._options.engine_enabled:
+                await self._emit_event_obj(
+                    HeimaEvent(
+                        type="system.engine_disabled",
+                        key="system.engine_disabled",
+                        severity="info",
+                        title="Heima engine disabled",
+                        message="Heima engine apply phases are disabled; canonical state continues updating.",
+                        context={"reason": "engine_enabled_false"},
+                    )
+                )
+                self._sync_event_sensors()
+            self._last_engine_enabled_state = self._options.engine_enabled
 
         if self._options.engine_enabled and self._lighting_apply_mode() == "scene":
             await self._execute_apply_plan(plan)
@@ -215,9 +231,17 @@ class HeimaEngine:
             if not slug:
                 continue
             is_home, source, confidence = self._compute_named_person_presence(person)
+            prev_is_home = self._state.get_binary(f"heima_person_{slug}_home")
             self._state.set_binary(f"heima_person_{slug}_home", is_home)
             self._state.set_sensor(f"heima_person_{slug}_source", source)
             self._state.set_sensor(f"heima_person_{slug}_confidence", confidence)
+            self._queue_people_transition_event(
+                slug=slug,
+                prev_is_home=prev_is_home,
+                is_home=is_home,
+                source=source,
+                confidence=confidence,
+            )
             if is_home:
                 home_people.append(slug)
 
@@ -234,9 +258,17 @@ class HeimaEngine:
             anon_confidence = 100 if anon_home else 0
             anon_source = ",".join(anon_sources) if anon_sources else "none"
             anon_weight = int(anon_cfg.get("anonymous_count_weight", 1)) if anon_home else 0
+            prev_anon_home = self._state.get_binary("heima_anonymous_presence")
             self._state.set_binary("heima_anonymous_presence", anon_home)
             self._state.set_sensor("heima_anonymous_presence_confidence", anon_confidence)
             self._state.set_sensor("heima_anonymous_presence_source", anon_source)
+            self._queue_anonymous_transition_event(
+                prev_is_on=prev_anon_home,
+                is_on=anon_home,
+                source=anon_source,
+                confidence=anon_confidence,
+                weight=int(anon_cfg.get("anonymous_count_weight", 1)),
+            )
             _LOGGER.debug("Anonymous presence active_count=%s", active_count)
 
         anyone_home = bool(home_people) or anon_home
@@ -295,11 +327,29 @@ class HeimaEngine:
         self._state.set_binary("heima_anyone_home", anyone_home)
         self._state.set_sensor("heima_people_count", people_count)
         self._state.set_sensor("heima_people_home_list", ",".join(people_home_list))
+        prev_house_state = self._state.get_sensor("heima_house_state")
         self._state.set_sensor("heima_house_state", house_state)
         self._state.set_sensor("heima_house_state_reason", house_reason)
+        self._queue_house_state_changed_event(
+            previous=str(prev_house_state) if prev_house_state not in (None, "") else None,
+            current=house_state,
+            reason=house_reason,
+        )
 
         if security_reason == "disabled" and "heima_security_reason" in self._state.sensors:
             self._state.set_sensor("heima_security_reason", security_reason)
+
+        self._queue_occupancy_consistency_events(
+            anyone_home=anyone_home,
+            occupied_rooms=occupied_rooms,
+            options=options,
+        )
+        self._queue_security_consistency_events(
+            anyone_home=anyone_home,
+            security_state=security_state,
+            options=options,
+            people_home_list=people_home_list,
+        )
 
         return DecisionSnapshot(
             snapshot_id=str(uuid4()),
@@ -435,7 +485,7 @@ class HeimaEngine:
                                 f"No mapped scene for room '{room_id}' "
                                 f"and intent '{intent}'"
                             ),
-                            context={"room": room_id, "intent": intent},
+                            context={"room": room_id, "intent": intent, "expected_scene": intent},
                         )
                     )
                     continue
@@ -454,6 +504,21 @@ class HeimaEngine:
                         "note": "multiple zones queued scenes for the same room in one evaluation",
                     }
                     conflicts.append(conflict)
+                    self._queue_event(
+                        HeimaEvent(
+                            type="lighting.zone_conflict",
+                            key=f"lighting.zone_conflict.{room_id}",
+                            severity="warn",
+                            title="Lighting zone conflict",
+                            message=f"Multiple lighting zones targeted room '{room_id}' in the same evaluation.",
+                            context={
+                                "room": room_id,
+                                "zone": zone_id,
+                                "intent": intent,
+                                "scene_entity": scene_entity,
+                            },
+                        )
+                    )
                     _LOGGER.warning(
                         "Lighting room '%s' targeted by multiple zones in one evaluation (latest zone=%s, intent=%s, scene=%s)",
                         room_id,
@@ -547,6 +612,135 @@ class HeimaEngine:
 
     def _queue_event(self, event: HeimaEvent) -> None:
         self._pending_events.append(event)
+
+    def _queue_people_transition_event(
+        self,
+        *,
+        slug: str,
+        prev_is_home: bool | None,
+        is_home: bool,
+        source: str,
+        confidence: int,
+    ) -> None:
+        if prev_is_home is None or prev_is_home == is_home:
+            return
+        self._queue_event(
+            HeimaEvent(
+                type="people.arrive" if is_home else "people.leave",
+                key=f"{'people.arrive' if is_home else 'people.leave'}.{slug}",
+                severity="info",
+                title="Person arrived" if is_home else "Person left",
+                message=f"Person '{slug}' {'arrived' if is_home else 'left'}.",
+                context={"person": slug, "source": source, "confidence": confidence},
+            )
+        )
+
+    def _queue_anonymous_transition_event(
+        self,
+        *,
+        prev_is_on: bool | None,
+        is_on: bool,
+        source: str,
+        confidence: int,
+        weight: int,
+    ) -> None:
+        if prev_is_on is None or prev_is_on == is_on:
+            return
+        context: dict[str, Any] = {"source": source, "confidence": confidence}
+        if is_on:
+            context["weight"] = weight
+        self._queue_event(
+            HeimaEvent(
+                type="people.anonymous_on" if is_on else "people.anonymous_off",
+                key="people.anonymous",
+                severity="info",
+                title="Anonymous presence detected" if is_on else "Anonymous presence cleared",
+                message=(
+                    "Anonymous presence detected."
+                    if is_on
+                    else "Anonymous presence cleared."
+                ),
+                context=context,
+            )
+        )
+
+    def _queue_house_state_changed_event(
+        self, *, previous: str | None, current: str, reason: str
+    ) -> None:
+        if previous is None or previous == "unknown" or previous == current:
+            return
+        self._queue_event(
+            HeimaEvent(
+                type="house_state.changed",
+                key="house_state.changed",
+                severity="info",
+                title="House state changed",
+                message=f"House state changed from '{previous}' to '{current}'.",
+                context={"from": previous, "to": current, "reason": reason},
+            )
+        )
+
+    def _queue_occupancy_consistency_events(
+        self, *, anyone_home: bool, occupied_rooms: list[str], options: dict[str, Any]
+    ) -> None:
+        if anyone_home and not occupied_rooms:
+            self._queue_event(
+                HeimaEvent(
+                    type="occupancy.inconsistency_home_no_room",
+                    key="occupancy.inconsistency_home_no_room",
+                    severity="info",
+                    title="Occupancy inconsistency",
+                    message="Someone is home but no room occupancy is active.",
+                    context={"anyone_home": anyone_home, "occupied_rooms": list(occupied_rooms)},
+                )
+            )
+
+        if occupied_rooms and not anyone_home:
+            room_sources = {
+                str(room.get("room_id")): list(room.get("sources", []))
+                for room in options.get(OPT_ROOMS, [])
+                if room.get("room_id")
+            }
+            for room_id in occupied_rooms:
+                self._queue_event(
+                    HeimaEvent(
+                        type="occupancy.inconsistency_room_no_home",
+                        key=f"occupancy.inconsistency_room_no_home.{room_id}",
+                        severity="info",
+                        title="Occupancy inconsistency",
+                        message=f"Room '{room_id}' is occupied but nobody is home.",
+                        context={
+                            "room": room_id,
+                            "anyone_home": anyone_home,
+                            "source_entities": room_sources.get(room_id, []),
+                        },
+                    )
+                )
+
+    def _queue_security_consistency_events(
+        self,
+        *,
+        anyone_home: bool,
+        security_state: str,
+        options: dict[str, Any],
+        people_home_list: list[str],
+    ) -> None:
+        security_cfg = dict(options.get(OPT_SECURITY, {}))
+        if not security_cfg.get("enabled"):
+            return
+
+        armed_away_value = str(security_cfg.get("armed_away_value", "armed_away"))
+        if security_state == armed_away_value and anyone_home:
+            self._queue_event(
+                HeimaEvent(
+                    type="security.armed_away_but_home",
+                    key="security.armed_away_but_home",
+                    severity="warn",
+                    title="Security inconsistency",
+                    message="Security is armed away while someone is home.",
+                    context={"security_state": security_state, "people_home_list": list(people_home_list)},
+                )
+            )
 
     async def _emit_queued_events(self) -> None:
         if not self._pending_events:

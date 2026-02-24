@@ -25,7 +25,11 @@ class _FakeStates:
 
 
 class _FakeBus:
+    def __init__(self):
+        self.events: list[tuple[str, dict]] = []
+
     def async_fire(self, event_type, data):
+        self.events.append((event_type, dict(data)))
         return None
 
 
@@ -57,6 +61,7 @@ def _build_engine(options: dict, state_values: dict[str, str] | None = None) -> 
 
 def test_room_with_occupancy_mode_none_is_off_and_does_not_contribute():
     options = {
+        "people_named": [{"slug": "p1", "presence_method": "manual", "enable_override": True}],
         "rooms": [
             {
                 "room_id": "soggiorno",
@@ -147,6 +152,36 @@ async def test_off_without_scene_uses_area_light_turn_off_fallback():
     )
 
 
+@pytest.mark.asyncio
+async def test_scene_missing_event_includes_expected_scene_context():
+    options = {
+        "people_named": [{"slug": "p1", "presence_method": "manual", "enable_override": True}],
+        "rooms": [
+            {
+                "room_id": "studio",
+                "area_id": None,
+                "occupancy_mode": "derived",
+                "sources": ["binary_sensor.studio_presence"],
+                "logic": "any_of",
+            }
+        ],
+        "lighting_zones": [{"zone_id": "zona", "rooms": ["studio"]}],
+        "lighting_rooms": [{"room_id": "studio", "enable_manual_hold": True}],
+    }
+    engine = _build_engine(options, {"binary_sensor.studio_presence": "on"})
+    engine.state.set_select("heima_person_p1_override", "force_home")
+    snapshot = engine._compute_snapshot(reason="test")
+    _ = engine._build_apply_plan(snapshot)
+    await engine._emit_queued_events()
+
+    event_payloads = [payload for event_type, payload in engine._hass.bus.events if event_type == "heima_event"]
+    scene_missing = [p for p in event_payloads if p["type"] == "lighting.scene_missing"]
+    assert scene_missing, "Expected lighting.scene_missing event"
+    assert scene_missing[-1]["context"]["room"] == "studio"
+    assert scene_missing[-1]["context"]["intent"] == "scene_evening"
+    assert scene_missing[-1]["context"]["expected_scene"] == "scene_evening"
+
+
 def test_room_in_multiple_zones_reports_conflict_in_diagnostics():
     options = {
         "rooms": [
@@ -191,3 +226,27 @@ def test_room_in_multiple_zones_reports_conflict_in_diagnostics():
     conflicts = diagnostics["lighting"]["conflicts_last_eval"]
     assert len(conflicts) == 1
     assert conflicts[0]["room_id"] == "soggiorno"
+
+
+@pytest.mark.asyncio
+async def test_security_armed_away_but_home_event_emitted():
+    options = {
+        "people_named": [{"slug": "stefano", "presence_method": "manual", "enable_override": True}],
+        "security": {
+            "enabled": True,
+            "security_state_entity": "alarm_control_panel.home",
+            "armed_away_value": "armed_away",
+            "armed_home_value": "armed_home",
+        },
+    }
+    engine = _build_engine(options, {"alarm_control_panel.home": "armed_away"})
+    engine.state.set_select("heima_person_stefano_override", "force_home")
+
+    _ = engine._compute_snapshot(reason="test")
+    await engine._emit_queued_events()
+
+    event_payloads = [payload for event_type, payload in engine._hass.bus.events if event_type == "heima_event"]
+    security_events = [p for p in event_payloads if p["type"] == "security.armed_away_but_home"]
+    assert security_events, "Expected security.armed_away_but_home event"
+    assert security_events[-1]["context"]["security_state"] == "armed_away"
+    assert security_events[-1]["context"]["people_home_list"] == ["stefano"]
