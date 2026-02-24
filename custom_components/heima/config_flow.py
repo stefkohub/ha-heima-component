@@ -37,6 +37,7 @@ from .const import (
 
 PRESENCE_METHODS = ["ha_person", "quorum", "manual"]
 ROOM_LOGIC = ["any_of", "all_of"]
+ROOM_OCCUPANCY_MODES = ["derived", "none"]
 HEATING_APPLY_MODES = ["delegate_to_scheduler", "set_temperature"]
 LIGHTING_APPLY_MODES = ["scene", "delegate"]
 
@@ -173,6 +174,10 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         if data.get("area_id"):
             data["area_id"] = str(data["area_id"])
         data["sources"] = self._normalize_multi_value(data.get("sources"))
+        occupancy_mode = str(data.get("occupancy_mode", "") or "").strip()
+        if occupancy_mode not in ROOM_OCCUPANCY_MODES:
+            occupancy_mode = "derived"
+        data["occupancy_mode"] = occupancy_mode
         data["logic"] = str(data.get("logic", "any_of"))
         return data
 
@@ -565,6 +570,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                     "room_id": room_id,
                     "display_name": area.name,
                     "area_id": area.id,
+                    "occupancy_mode": "none",
                     "sources": [],
                     "logic": "any_of",
                     "on_dwell_s": 5,
@@ -585,8 +591,12 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional("display_name", default=defaults.get("display_name", "")):
                 cv.string,
                 vol.Optional("area_id"): selector({"area": {}}),
-                vol.Required("sources"): _entity_selector(["binary_sensor", "sensor"], multiple=True),
-                vol.Required("logic", default=defaults.get("logic", "any_of")): vol.In(ROOM_LOGIC),
+                vol.Optional(
+                    "occupancy_mode",
+                    default=defaults.get("occupancy_mode", "derived"),
+                ): vol.In(ROOM_OCCUPANCY_MODES),
+                vol.Optional("sources"): _entity_selector(["binary_sensor", "sensor"], multiple=True),
+                vol.Optional("logic", default=defaults.get("logic", "any_of")): vol.In(ROOM_LOGIC),
                 vol.Optional("on_dwell_s", default=defaults.get("on_dwell_s", 5)): cv.positive_int,
                 vol.Optional("off_dwell_s", default=defaults.get("off_dwell_s", 120)): cv.positive_int,
                 vol.Optional("max_on_s", default=defaults.get("max_on_s")):
@@ -624,8 +634,12 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
             if area_id in existing_area_ids:
                 errors["area_id"] = "duplicate"
 
+        occupancy_mode = str(payload.get("occupancy_mode", "derived"))
+        if occupancy_mode not in ROOM_OCCUPANCY_MODES:
+            errors["occupancy_mode"] = "invalid_option"
+
         sources = payload.get("sources", [])
-        if not sources:
+        if occupancy_mode == "derived" and not sources:
             errors["sources"] = "required"
         return errors
 
@@ -1014,7 +1028,14 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 self._normalize_people_payload(person) for person in options.get(OPT_PEOPLE_NAMED, [])
             ]
         if OPT_ROOMS in options:
-            options[OPT_ROOMS] = [self._normalize_room_payload(room) for room in options.get(OPT_ROOMS, [])]
+            normalized_rooms: list[dict[str, Any]] = []
+            for room in options.get(OPT_ROOMS, []):
+                room_norm = self._normalize_room_payload(room)
+                # Backfill legacy rooms: empty sources usually indicate actuation-only rooms.
+                if "occupancy_mode" not in room and not room_norm.get("sources"):
+                    room_norm["occupancy_mode"] = "none"
+                normalized_rooms.append(room_norm)
+            options[OPT_ROOMS] = normalized_rooms
         if OPT_NOTIFICATIONS in options:
             options[OPT_NOTIFICATIONS] = self._normalize_notifications_payload(
                 options.get(OPT_NOTIFICATIONS, {})

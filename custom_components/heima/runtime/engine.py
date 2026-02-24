@@ -248,12 +248,13 @@ class HeimaEngine:
             room_id = room.get("room_id")
             if not room_id:
                 continue
+            occupancy_mode = self._room_occupancy_mode(room)
             is_occupied = self._compute_room_occupancy(room)
             prev_value = self._state.get_binary(f"heima_occ_{room_id}")
             self._state.set_binary(f"heima_occ_{room_id}", is_occupied)
             self._state.set_sensor(
                 f"heima_occ_{room_id}_source",
-                ",".join(room.get("sources", [])),
+                "none" if occupancy_mode == "none" else ",".join(room.get("sources", [])),
             )
             if prev_value != is_occupied:
                 self._state.set_sensor(f"heima_occ_{room_id}_last_change", now)
@@ -316,6 +317,7 @@ class HeimaEngine:
     def _compute_lighting_intents(self, house_state: str, occupied_rooms: list[str]) -> dict[str, str]:
         options = dict(self._entry.options)
         occupied = set(occupied_rooms)
+        room_configs = self._room_configs()
         lighting_intents: dict[str, str] = {}
         zone_trace: dict[str, dict[str, Any]] = {}
 
@@ -324,7 +326,12 @@ class HeimaEngine:
             if not zone_id:
                 continue
             rooms = list(zone.get("rooms", []))
-            zone_occupied = any(room_id in occupied for room_id in rooms)
+            occupancy_capable_rooms = [
+                room_id
+                for room_id in rooms
+                if self._room_occupancy_mode(room_configs.get(room_id, {})) == "derived"
+            ]
+            zone_occupied = any(room_id in occupied for room_id in occupancy_capable_rooms)
 
             select_key = f"heima_lighting_intent_{zone_id}"
             requested_intent = self._state.get_select(select_key) or "auto"
@@ -333,6 +340,7 @@ class HeimaEngine:
             zone_trace[str(zone_id)] = {
                 "zone_id": str(zone_id),
                 "rooms": rooms,
+                "occupancy_capable_rooms": occupancy_capable_rooms,
                 "zone_occupied": zone_occupied,
                 "requested_intent": requested_intent,
                 "final_intent": final_intent,
@@ -357,6 +365,10 @@ class HeimaEngine:
                     "room_id": room_id,
                     "intent": intent,
                     "hold": False,
+                    "room_occupancy_mode": self._room_occupancy_mode(room_configs.get(room_id, {})),
+                    "contributes_to_zone_occupancy": (
+                        self._room_occupancy_mode(room_configs.get(room_id, {})) == "derived"
+                    ),
                     "room_mapping_found": False,
                     "action": None,
                     "action_params": None,
@@ -658,6 +670,8 @@ class HeimaEngine:
         return active >= max(1, required), active
 
     def _compute_room_occupancy(self, room_cfg: dict[str, Any]) -> bool:
+        if self._room_occupancy_mode(room_cfg) == "none":
+            return False
         sources = list(room_cfg.get("sources", []))
         logic = room_cfg.get("logic", "any_of")
         if not sources:
@@ -707,6 +721,10 @@ class HeimaEngine:
             if zone.get("zone_id") == zone_id:
                 return list(zone.get("rooms", []))
         return []
+
+    def _room_occupancy_mode(self, room_cfg: dict[str, Any]) -> str:
+        mode = str(room_cfg.get("occupancy_mode", "derived") or "derived")
+        return mode if mode in {"derived", "none"} else "derived"
 
     def diagnostics(self) -> dict[str, Any]:
         return {
