@@ -70,9 +70,7 @@ def _is_valid_slug(value: str) -> bool:
         return False
 
 
-def _non_negative_int(value: Any) -> int:
-    """Validate an int >= 0 (useful for disabling timers/rate limits)."""
-    return vol.All(vol.Coerce(int), vol.Range(min=0))(value)
+_NON_NEGATIVE_INT = vol.All(vol.Coerce(int), vol.Range(min=0))
 
 
 class HeimaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -1006,10 +1004,10 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                     EVENT_CATEGORIES_TOGGLEABLE
                 ),
                 vol.Optional("dedup_window_s", default=defaults.get("dedup_window_s", 60)):
-                _non_negative_int,
+                _NON_NEGATIVE_INT,
                 vol.Optional(
                     "rate_limit_per_key_s", default=defaults.get("rate_limit_per_key_s", 300)
-                ): _non_negative_int,
+                ): _NON_NEGATIVE_INT,
             }
         )
         defaults_with_categories = dict(defaults)
