@@ -66,3 +66,30 @@ def test_notifications_schema_does_not_rehydrate_cleared_routes():
     assert "routes" not in validated
     assert validated["dedup_window_s"] == 0
     assert validated["rate_limit_per_key_s"] == 0
+
+
+def test_notifications_payload_defaults_event_categories_when_missing():
+    flow = _flow()
+    normalized = flow._normalize_notifications_payload(
+        {"routes": [], "dedup_window_s": 60, "rate_limit_per_key_s": 300}
+    )
+    assert set(normalized["enabled_event_categories"]) == {
+        "people",
+        "occupancy",
+        "lighting",
+        "heating",
+        "security",
+    }
+
+
+def test_notifications_payload_filters_invalid_event_categories():
+    flow = _flow()
+    normalized = flow._normalize_notifications_payload(
+        {
+            "routes": [],
+            "enabled_event_categories": ["people", "system", "debug", "lighting"],
+            "dedup_window_s": 60,
+            "rate_limit_per_key_s": 300,
+        }
+    )
+    assert normalized["enabled_event_categories"] == ["people", "lighting"]

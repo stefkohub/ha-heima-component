@@ -29,6 +29,31 @@ OPT_NOTIFICATIONS = "notifications"
 DEFAULT_ENGINE_ENABLED = True
 DEFAULT_LIGHTING_APPLY_MODE = "scene"
 
+EVENT_CATEGORIES_ALL = [
+    "people",
+    "occupancy",
+    "house_state",
+    "lighting",
+    "heating",
+    "security",
+    "system",
+]
+EVENT_CATEGORIES_TOGGLEABLE = [
+    "people",
+    "occupancy",
+    "house_state",
+    "lighting",
+    "heating",
+    "security",
+]
+DEFAULT_ENABLED_EVENT_CATEGORIES = [
+    "people",
+    "occupancy",
+    "lighting",
+    "heating",
+    "security",
+]
+
 # Services
 SERVICE_COMMAND = "command"
 SERVICE_SET_MODE = "set_mode"

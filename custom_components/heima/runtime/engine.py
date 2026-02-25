@@ -15,6 +15,8 @@ from homeassistant.core import HomeAssistant
 
 from ..const import (
     DEFAULT_LIGHTING_APPLY_MODE,
+    DEFAULT_ENABLED_EVENT_CATEGORIES,
+    EVENT_CATEGORIES_ALL,
     OPT_LIGHTING_APPLY_MODE,
     OPT_LIGHTING_ROOMS,
     OPT_LIGHTING_ZONES,
@@ -84,6 +86,7 @@ class HeimaEngine:
         self._last_engine_enabled_state: bool | None = None
         self._events = HeimaEventPipeline(hass)
         self._pending_events: list[HeimaEvent] = []
+        self._suppressed_event_categories: dict[str, int] = {}
 
     @property
     def health(self) -> EngineHealth:
@@ -799,6 +802,13 @@ class HeimaEngine:
         self._sync_event_sensors()
 
     async def _emit_event_obj(self, event: HeimaEvent) -> bool:
+        if not self._event_enabled(event):
+            category = self._event_category(event.type)
+            self._suppressed_event_categories[category] = (
+                self._suppressed_event_categories.get(category, 0) + 1
+            )
+            _LOGGER.debug("Heima event suppressed by category toggle: %s (%s)", event.type, category)
+            return False
         notifications_cfg = self._notifications_config()
         return await self._events.async_emit(
             event,
@@ -809,6 +819,29 @@ class HeimaEngine:
 
     def _notifications_config(self) -> dict[str, Any]:
         return dict(dict(self._entry.options).get(OPT_NOTIFICATIONS, {}))
+
+    def _event_category(self, event_type: str) -> str:
+        prefix = str(event_type or "").split(".", 1)[0]
+        return prefix or "system"
+
+    def _enabled_event_categories(self) -> set[str]:
+        cfg = self._notifications_config()
+        raw = cfg.get("enabled_event_categories")
+        if raw is None:
+            return set(DEFAULT_ENABLED_EVENT_CATEGORIES) | {"system"}
+        enabled = {str(v) for v in list(raw) if str(v)}
+        enabled.add("system")  # system is always enabled by spec
+        return enabled
+
+    def _event_enabled(self, event: HeimaEvent) -> bool:
+        category = self._event_category(event.type)
+        if category == "system":
+            return True
+        # Unknown/custom categories (e.g. debug.manual_test) stay enabled unless explicitly standardized.
+        known_categories = set(EVENT_CATEGORIES_ALL)
+        if category not in known_categories:
+            return True
+        return category in self._enabled_event_categories()
 
     def _sync_event_sensors(self) -> None:
         stats = self._events.stats.as_dict()
@@ -833,6 +866,7 @@ class HeimaEngine:
                     "suppressed_by_key": stats.get("suppressed_by_key", {}),
                     "last_event": last_event,
                     "raw_json": json.dumps(stats, sort_keys=True),
+                    "suppressed_event_categories": dict(self._suppressed_event_categories),
                 },
             )
 

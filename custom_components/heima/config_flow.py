@@ -22,8 +22,10 @@ from .const import (
     CONF_LANGUAGE,
     CONF_TIMEZONE,
     DEFAULT_ENGINE_ENABLED,
+    DEFAULT_ENABLED_EVENT_CATEGORIES,
     DEFAULT_LIGHTING_APPLY_MODE,
     DOMAIN,
+    EVENT_CATEGORIES_TOGGLEABLE,
     OPT_HEATING,
     OPT_LIGHTING_APPLY_MODE,
     OPT_LIGHTING_ROOMS,
@@ -202,6 +204,14 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
     def _normalize_notifications_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         data = dict(payload)
         data["routes"] = self._normalize_multi_value(data.get("routes"))
+        categories_present = "enabled_event_categories" in data
+        categories = self._normalize_multi_value(data.get("enabled_event_categories"))
+        if categories_present:
+            data["enabled_event_categories"] = [
+                c for c in categories if c in EVENT_CATEGORIES_TOGGLEABLE
+            ]
+        else:
+            data["enabled_event_categories"] = list(DEFAULT_ENABLED_EVENT_CATEGORIES)
         return data
 
     def _error_if_immutable_changed(
@@ -992,6 +1002,9 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional("routes"): cv.multi_select(
                     self._notify_service_choices(defaults.get("routes", []))
                 ),
+                vol.Optional("enabled_event_categories"): cv.multi_select(
+                    EVENT_CATEGORIES_TOGGLEABLE
+                ),
                 vol.Optional("dedup_window_s", default=defaults.get("dedup_window_s", 60)):
                 _non_negative_int,
                 vol.Optional(
@@ -999,7 +1012,11 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 ): _non_negative_int,
             }
         )
-        return self._with_suggested(schema, defaults)
+        defaults_with_categories = dict(defaults)
+        defaults_with_categories.setdefault(
+            "enabled_event_categories", list(DEFAULT_ENABLED_EVENT_CATEGORIES)
+        )
+        return self._with_suggested(schema, defaults_with_categories)
 
     def _finalize_options(self) -> dict[str, Any]:
         """Return a coherent options snapshot before persisting."""
