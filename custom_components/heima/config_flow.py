@@ -23,9 +23,13 @@ from .const import (
     CONF_TIMEZONE,
     DEFAULT_ENGINE_ENABLED,
     DEFAULT_ENABLED_EVENT_CATEGORIES,
+    DEFAULT_OCCUPANCY_MISMATCH_MIN_DERIVED_ROOMS,
+    DEFAULT_OCCUPANCY_MISMATCH_PERSIST_S,
+    DEFAULT_OCCUPANCY_MISMATCH_POLICY,
     DEFAULT_LIGHTING_APPLY_MODE,
     DOMAIN,
     EVENT_CATEGORIES_TOGGLEABLE,
+    OCCUPANCY_MISMATCH_POLICIES,
     OPT_HEATING,
     OPT_LIGHTING_APPLY_MODE,
     OPT_LIGHTING_ROOMS,
@@ -210,6 +214,19 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
             ]
         else:
             data["enabled_event_categories"] = list(DEFAULT_ENABLED_EVENT_CATEGORIES)
+        policy = str(data.get("occupancy_mismatch_policy", DEFAULT_OCCUPANCY_MISMATCH_POLICY))
+        if policy not in OCCUPANCY_MISMATCH_POLICIES:
+            policy = DEFAULT_OCCUPANCY_MISMATCH_POLICY
+        data["occupancy_mismatch_policy"] = policy
+        data["occupancy_mismatch_min_derived_rooms"] = int(
+            data.get(
+                "occupancy_mismatch_min_derived_rooms",
+                DEFAULT_OCCUPANCY_MISMATCH_MIN_DERIVED_ROOMS,
+            )
+        )
+        data["occupancy_mismatch_persist_s"] = int(
+            data.get("occupancy_mismatch_persist_s", DEFAULT_OCCUPANCY_MISMATCH_PERSIST_S)
+        )
         return data
 
     def _error_if_immutable_changed(
@@ -1007,6 +1024,25 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 _NON_NEGATIVE_INT,
                 vol.Optional(
                     "rate_limit_per_key_s", default=defaults.get("rate_limit_per_key_s", 300)
+                ): _NON_NEGATIVE_INT,
+                vol.Optional(
+                    "occupancy_mismatch_policy",
+                    default=defaults.get(
+                        "occupancy_mismatch_policy", DEFAULT_OCCUPANCY_MISMATCH_POLICY
+                    ),
+                ): vol.In(OCCUPANCY_MISMATCH_POLICIES),
+                vol.Optional(
+                    "occupancy_mismatch_min_derived_rooms",
+                    default=defaults.get(
+                        "occupancy_mismatch_min_derived_rooms",
+                        DEFAULT_OCCUPANCY_MISMATCH_MIN_DERIVED_ROOMS,
+                    ),
+                ): _NON_NEGATIVE_INT,
+                vol.Optional(
+                    "occupancy_mismatch_persist_s",
+                    default=defaults.get(
+                        "occupancy_mismatch_persist_s", DEFAULT_OCCUPANCY_MISMATCH_PERSIST_S
+                    ),
                 ): _NON_NEGATIVE_INT,
             }
         )

@@ -130,6 +130,14 @@ Notes:
 - `context`:
   - `anyone_home`
   - `occupied_rooms` (list)
+  - `policy` (`smart|strict`)
+  - `derived_room_count` (int)
+  - `persist_s` (int)
+
+Emission policy (v1.x):
+- `smart` (default): emit only if occupancy sensor coverage is sufficient and mismatch persists
+- `strict`: emit immediately when condition is true
+- `off`: disabled
 
 #### E022 — Occupancy / People Inconsistency (Room Occupied, No One Home)
 - `type`: `occupancy.inconsistency_room_no_home`
@@ -139,6 +147,13 @@ Notes:
   - `room`
   - `anyone_home`
   - `source_entities`
+  - `policy` (`smart|strict`)
+  - `persist_s` (int)
+
+Emission policy (v1.x):
+- `smart` (default): emit only if mismatch persists and room is occupancy-capable (`occupancy_mode = derived`)
+- `strict`: emit immediately when condition is true
+- `off`: disabled
 
 ---
 
@@ -272,6 +287,21 @@ Defaults:
 - heating/security: enabled
 - people/occupancy: enabled
 - house_state: disabled (noise-prone)
+
+### 3.1 Occupancy Mismatch Policy (v1.x)
+To avoid false positives in homes with partial or sparse room sensing coverage, occupancy mismatch events use a dedicated policy:
+
+- `occupancy_mismatch_policy`: `off | smart | strict` (default: `smart`)
+- `occupancy_mismatch_min_derived_rooms` (default: `2`)
+- `occupancy_mismatch_persist_s` (default: `600`)
+
+`smart` policy semantics:
+- `home_no_room` (`E021`) is emitted only if:
+  - derived room coverage is at least `occupancy_mismatch_min_derived_rooms`
+  - the mismatch persists for at least `occupancy_mismatch_persist_s`
+- `room_no_home` (`E022`) is emitted only if:
+  - the room is occupancy-capable (`occupancy_mode = derived`)
+  - the mismatch persists for at least `occupancy_mismatch_persist_s`
 
 ---
 

@@ -80,6 +80,9 @@ def test_notifications_payload_defaults_event_categories_when_missing():
         "heating",
         "security",
     }
+    assert normalized["occupancy_mismatch_policy"] == "smart"
+    assert normalized["occupancy_mismatch_min_derived_rooms"] == 2
+    assert normalized["occupancy_mismatch_persist_s"] == 600
 
 
 def test_notifications_payload_filters_invalid_event_categories():
@@ -93,3 +96,21 @@ def test_notifications_payload_filters_invalid_event_categories():
         }
     )
     assert normalized["enabled_event_categories"] == ["people", "lighting"]
+
+
+def test_notifications_payload_normalizes_mismatch_policy():
+    flow = _flow()
+    normalized = flow._normalize_notifications_payload(
+        {
+            "routes": [],
+            "enabled_event_categories": [],
+            "occupancy_mismatch_policy": "invalid",
+            "occupancy_mismatch_min_derived_rooms": 3,
+            "occupancy_mismatch_persist_s": 120,
+            "dedup_window_s": 60,
+            "rate_limit_per_key_s": 300,
+        }
+    )
+    assert normalized["occupancy_mismatch_policy"] == "smart"
+    assert normalized["occupancy_mismatch_min_derived_rooms"] == 3
+    assert normalized["occupancy_mismatch_persist_s"] == 120

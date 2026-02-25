@@ -16,6 +16,9 @@ from homeassistant.core import HomeAssistant
 from ..const import (
     DEFAULT_LIGHTING_APPLY_MODE,
     DEFAULT_ENABLED_EVENT_CATEGORIES,
+    DEFAULT_OCCUPANCY_MISMATCH_MIN_DERIVED_ROOMS,
+    DEFAULT_OCCUPANCY_MISMATCH_PERSIST_S,
+    DEFAULT_OCCUPANCY_MISMATCH_POLICY,
     EVENT_CATEGORIES_ALL,
     OPT_LIGHTING_APPLY_MODE,
     OPT_LIGHTING_ROOMS,
@@ -87,6 +90,10 @@ class HeimaEngine:
         self._events = HeimaEventPipeline(hass)
         self._pending_events: list[HeimaEvent] = []
         self._suppressed_event_categories: dict[str, int] = {}
+        self._occupancy_home_no_room_since: float | None = None
+        self._occupancy_home_no_room_emitted: bool = False
+        self._occupancy_room_no_home_since: dict[str, float] = {}
+        self._occupancy_room_no_home_emitted: set[str] = set()
 
     @property
     def health(self) -> EngineHealth:
@@ -730,7 +737,33 @@ class HeimaEngine:
     def _queue_occupancy_consistency_events(
         self, *, anyone_home: bool, occupied_rooms: list[str], options: dict[str, Any]
     ) -> None:
-        if anyone_home and not occupied_rooms:
+        mismatch_cfg = self._occupancy_mismatch_config()
+        policy = mismatch_cfg["policy"]
+        if policy == "off":
+            self._occupancy_home_no_room_since = None
+            self._occupancy_home_no_room_emitted = False
+            self._occupancy_room_no_home_since.clear()
+            self._occupancy_room_no_home_emitted.clear()
+            return
+
+        derived_rooms = [
+            str(room.get("room_id"))
+            for room in options.get(OPT_ROOMS, [])
+            if room.get("room_id") and self._room_occupancy_mode(room) == "derived"
+        ]
+        derived_room_count = len(derived_rooms)
+        persist_s = mismatch_cfg["persist_s"]
+        min_derived_rooms = mismatch_cfg["min_derived_rooms"]
+
+        home_no_room_condition = anyone_home and not occupied_rooms
+        if policy == "smart" and derived_room_count < min_derived_rooms:
+            home_no_room_condition = False
+
+        if self._persistent_condition_ready(
+            key="home_no_room",
+            active=home_no_room_condition,
+            persist_s=0 if policy == "strict" else persist_s,
+        ):
             self._queue_event(
                 HeimaEvent(
                     type="occupancy.inconsistency_home_no_room",
@@ -738,17 +771,36 @@ class HeimaEngine:
                     severity="info",
                     title="Occupancy inconsistency",
                     message="Someone is home but no room occupancy is active.",
-                    context={"anyone_home": anyone_home, "occupied_rooms": list(occupied_rooms)},
+                    context={
+                        "anyone_home": anyone_home,
+                        "occupied_rooms": list(occupied_rooms),
+                        "policy": policy,
+                        "derived_room_count": derived_room_count,
+                        "persist_s": 0 if policy == "strict" else persist_s,
+                    },
                 )
             )
 
+        room_sources = {
+            str(room.get("room_id")): list(room.get("sources", []))
+            for room in options.get(OPT_ROOMS, [])
+            if room.get("room_id")
+        }
+
+        active_room_no_home = set()
         if occupied_rooms and not anyone_home:
-            room_sources = {
-                str(room.get("room_id")): list(room.get("sources", []))
-                for room in options.get(OPT_ROOMS, [])
-                if room.get("room_id")
-            }
             for room_id in occupied_rooms:
+                room_cfg = self._room_config(room_id)
+                if self._room_occupancy_mode(room_cfg) != "derived":
+                    self._reset_persistent_room_condition(room_id)
+                    continue
+                active_room_no_home.add(room_id)
+                if not self._persistent_condition_ready(
+                    key=f"room_no_home:{room_id}",
+                    active=True,
+                    persist_s=0 if policy == "strict" else persist_s,
+                ):
+                    continue
                 self._queue_event(
                     HeimaEvent(
                         type="occupancy.inconsistency_room_no_home",
@@ -760,9 +812,15 @@ class HeimaEngine:
                             "room": room_id,
                             "anyone_home": anyone_home,
                             "source_entities": room_sources.get(room_id, []),
+                            "policy": policy,
+                            "persist_s": 0 if policy == "strict" else persist_s,
                         },
                     )
                 )
+
+        for room_id in list(self._occupancy_room_no_home_since.keys()):
+            if room_id not in active_room_no_home:
+                self._reset_persistent_room_condition(room_id)
 
     def _queue_security_consistency_events(
         self,
@@ -819,6 +877,62 @@ class HeimaEngine:
 
     def _notifications_config(self) -> dict[str, Any]:
         return dict(dict(self._entry.options).get(OPT_NOTIFICATIONS, {}))
+
+    def _occupancy_mismatch_config(self) -> dict[str, Any]:
+        cfg = self._notifications_config()
+        policy = str(cfg.get("occupancy_mismatch_policy", DEFAULT_OCCUPANCY_MISMATCH_POLICY))
+        if policy not in {"off", "smart", "strict"}:
+            policy = DEFAULT_OCCUPANCY_MISMATCH_POLICY
+        return {
+            "policy": policy,
+            "min_derived_rooms": int(
+                cfg.get(
+                    "occupancy_mismatch_min_derived_rooms",
+                    DEFAULT_OCCUPANCY_MISMATCH_MIN_DERIVED_ROOMS,
+                )
+            ),
+            "persist_s": int(
+                cfg.get("occupancy_mismatch_persist_s", DEFAULT_OCCUPANCY_MISMATCH_PERSIST_S)
+            ),
+        }
+
+    def _persistent_condition_ready(self, *, key: str, active: bool, persist_s: int) -> bool:
+        now = time.monotonic()
+        if key == "home_no_room":
+            if not active:
+                self._occupancy_home_no_room_since = None
+                self._occupancy_home_no_room_emitted = False
+                return False
+            if self._occupancy_home_no_room_since is None:
+                self._occupancy_home_no_room_since = now
+                self._occupancy_home_no_room_emitted = False
+            if self._occupancy_home_no_room_emitted:
+                return False
+            if persist_s <= 0 or (now - self._occupancy_home_no_room_since) >= persist_s:
+                self._occupancy_home_no_room_emitted = True
+                return True
+            return False
+
+        if key.startswith("room_no_home:"):
+            room_id = key.split(":", 1)[1]
+            if not active:
+                self._reset_persistent_room_condition(room_id)
+                return False
+            if room_id not in self._occupancy_room_no_home_since:
+                self._occupancy_room_no_home_since[room_id] = now
+                self._occupancy_room_no_home_emitted.discard(room_id)
+            if room_id in self._occupancy_room_no_home_emitted:
+                return False
+            if persist_s <= 0 or (now - self._occupancy_room_no_home_since[room_id]) >= persist_s:
+                self._occupancy_room_no_home_emitted.add(room_id)
+                return True
+            return False
+
+        return False
+
+    def _reset_persistent_room_condition(self, room_id: str) -> None:
+        self._occupancy_room_no_home_since.pop(room_id, None)
+        self._occupancy_room_no_home_emitted.discard(room_id)
 
     def _event_category(self, event_type: str) -> str:
         prefix = str(event_type or "").split(".", 1)[0]
