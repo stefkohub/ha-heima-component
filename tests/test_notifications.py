@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from homeassistant.exceptions import ServiceNotFound
 
 from custom_components.heima.runtime.contracts import HeimaEvent
 from custom_components.heima.runtime.notifications import HeimaEventPipeline
@@ -15,11 +16,19 @@ class _FakeBus:
 
 
 class _FakeServices:
-    def __init__(self):
+    def __init__(self, available: dict[str, object] | None = None, fail_once: set[str] | None = None):
         self.calls = []
+        self.available = dict(available or {})
+        self.fail_once = set(fail_once or set())
 
     async def async_call(self, domain, service, data, blocking=False):
+        if domain == "notify" and service in self.fail_once:
+            self.fail_once.remove(service)
+            raise ServiceNotFound(domain, service)
         self.calls.append((domain, service, data, blocking))
+
+    def async_services(self):
+        return {"notify": dict(self.available)}
 
 
 @pytest.mark.asyncio
@@ -104,3 +113,72 @@ async def test_event_pipeline_rate_limits_after_dedup_window(monkeypatch):
 
     assert pipeline.stats.dropped_rate_limited == 1
     assert len(bus.events) == 1
+
+
+@pytest.mark.asyncio
+async def test_event_pipeline_defers_missing_notify_route_without_failing():
+    bus = _FakeBus()
+    services = _FakeServices(available={})
+    hass = SimpleNamespace(bus=bus, services=services)
+    pipeline = HeimaEventPipeline(hass)
+
+    emitted = await pipeline.async_emit(
+        HeimaEvent(
+            type="debug.test",
+            key="debug.test",
+            severity="info",
+            title="t",
+            message="m",
+        ),
+        routes=["mobile_app_test"],
+        dedup_window_s=0,
+        rate_limit_per_key_s=0,
+    )
+
+    assert emitted is True
+    assert len(bus.events) == 1
+    assert services.calls == []
+    assert pipeline.stats.notify_route_unavailable >= 1
+
+
+@pytest.mark.asyncio
+async def test_event_pipeline_retries_deferred_route_when_service_appears():
+    bus = _FakeBus()
+    services = _FakeServices(available={})
+    hass = SimpleNamespace(bus=bus, services=services)
+    pipeline = HeimaEventPipeline(hass)
+
+    first = HeimaEvent(
+        type="debug.first",
+        key="debug.first",
+        severity="info",
+        title="first",
+        message="first",
+    )
+    await pipeline.async_emit(
+        first,
+        routes=["mobile_app_test"],
+        dedup_window_s=0,
+        rate_limit_per_key_s=0,
+    )
+    assert services.calls == []
+
+    services.available["mobile_app_test"] = object()
+    second = HeimaEvent(
+        type="debug.second",
+        key="debug.second",
+        severity="info",
+        title="second",
+        message="second",
+    )
+    await pipeline.async_emit(
+        second,
+        routes=[],
+        dedup_window_s=0,
+        rate_limit_per_key_s=0,
+    )
+
+    notify_calls = [c for c in services.calls if c[0] == "notify" and c[1] == "mobile_app_test"]
+    assert len(notify_calls) == 1
+    assert notify_calls[0][2]["title"] == "first"
+    assert pipeline.stats.notify_route_retried == 1
