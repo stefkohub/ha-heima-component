@@ -36,22 +36,13 @@ from ..entities.registry import build_registry
 from ..models import HeimaOptions
 from .contracts import ApplyPlan, ApplyStep, HeimaEvent
 from .lighting import pick_scene_for_intent_with_trace, resolve_zone_intent
+from .normalization.service import InputNormalizer
 from .notifications import HeimaEventPipeline
 from .policy import resolve_house_state
 from .snapshot import DecisionSnapshot
 from .state_store import CanonicalState
 
 _LOGGER = logging.getLogger(__name__)
-
-_PRESENCE_ON_STATES = {
-    "on",
-    "home",
-    "open",
-    "occupied",
-    "detected",
-    "true",
-    "1",
-}
 
 _HOUSE_SIGNAL_ENTITIES = {
     "input_boolean.vacation_mode",
@@ -91,6 +82,7 @@ class HeimaEngine:
         self._lighting_conflicts_last_eval: list[dict[str, Any]] = []
         self._last_engine_enabled_state: bool | None = None
         self._events = HeimaEventPipeline(hass)
+        self._normalizer = InputNormalizer(hass)
         self._pending_events: list[HeimaEvent] = []
         self._suppressed_event_categories: dict[str, int] = {}
         self._occupancy_home_no_room_since: float | None = None
@@ -1153,19 +1145,10 @@ class HeimaEngine:
         return state == "home"
 
     def _is_presence_on(self, entity_id: str | None) -> bool:
-        state = self._read_state(entity_id)
-        if state is None:
-            return False
-        lowered = state.lower()
-        if lowered in _PRESENCE_ON_STATES:
-            return True
-        try:
-            return float(state) > 0
-        except ValueError:
-            return False
+        return self._normalizer.presence(entity_id).state == "on"
 
     def _is_on_any(self, entity_ids: list[str]) -> bool:
-        return any(self._is_presence_on(entity_id) for entity_id in entity_ids)
+        return any(self._normalizer.boolean_signal(entity_id).state == "on" for entity_id in entity_ids)
 
     def _read_state(self, entity_id: str | None) -> str | None:
         if not entity_id:

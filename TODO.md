@@ -38,7 +38,7 @@
 
 5. [ ] Cross-Cut — Input Normalization Layer (Incremental Rollout N1-N5)
 - [x] N1 Foundation: add shared normalization contracts + `InputNormalizer` facade + fusion plugin/strategy registry contract (behavior-preserving legacy-backed adapter).
-- [ ] N1 Migration: route existing runtime raw reads through the facade (no behavioral change intended).
+- [x] N1 Migration: route existing runtime raw reads through the facade (no behavioral change intended).
 - [ ] N2 Occupancy: compute room occupancy from normalized presence observations; implement `on_dwell_s` / `off_dwell_s` / `max_on_s`.
 - [ ] N2 Diagnostics: expose normalization trace for occupancy sources (raw_state -> normalized_state/reason).
 - [ ] N3 Security: normalize alarm raw states to canonical security observation; migrate `security.*` consistency logic to normalized inputs.
