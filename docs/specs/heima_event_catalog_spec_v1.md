@@ -303,6 +303,21 @@ To avoid false positives in homes with partial or sparse room sensing coverage, 
   - the room is occupancy-capable (`occupancy_mode = derived`)
   - the mismatch persists for at least `occupancy_mismatch_persist_s`
 
+### 3.2 Security Mismatch Policy (v1.x)
+To avoid false positives when person trackers lag after arming away, security mismatch events use a dedicated policy:
+
+- `security_mismatch_policy`: `off | smart | strict` (default: `smart`)
+- `security_mismatch_persist_s` (default: `300`)
+
+`smart` policy semantics for `security.armed_away_but_home`:
+- requires mismatch persistence for at least `security_mismatch_persist_s`
+- requires corroborating local evidence of presence:
+  - at least one occupied room with `occupancy_mode = derived`, or
+  - anonymous presence is active
+
+`strict` policy semantics:
+- emits immediately when security is `armed_away` and `anyone_home = true`
+
 ---
 
 ## 4. Diagnostics & Privacy

@@ -225,11 +225,14 @@ Fields:
 - `occupancy_mismatch_policy` (`off|smart|strict`, default `smart`)
 - `occupancy_mismatch_min_derived_rooms` (int, default `2`)
 - `occupancy_mismatch_persist_s` (int, default `600`)
+- `security_mismatch_policy` (`off|smart|strict`, default `smart`)
+- `security_mismatch_persist_s` (int, default `300`)
 
 Runtime Effect:
 - affects notification policy and orchestrator
 - category toggles gate event emission before routing/dedup pipeline
 - occupancy mismatch policy reduces false positives in partial-room-sensing homes
+- security mismatch policy delays/suppresses `armed_away_but_home` false positives caused by stale trackers
 
 ---
 

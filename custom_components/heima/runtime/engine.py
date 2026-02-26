@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceNotFound
 
 from ..const import (
     DEFAULT_LIGHTING_APPLY_MODE,
@@ -19,6 +20,8 @@ from ..const import (
     DEFAULT_OCCUPANCY_MISMATCH_MIN_DERIVED_ROOMS,
     DEFAULT_OCCUPANCY_MISMATCH_PERSIST_S,
     DEFAULT_OCCUPANCY_MISMATCH_POLICY,
+    DEFAULT_SECURITY_MISMATCH_PERSIST_S,
+    DEFAULT_SECURITY_MISMATCH_POLICY,
     EVENT_CATEGORIES_ALL,
     OPT_LIGHTING_APPLY_MODE,
     OPT_LIGHTING_ROOMS,
@@ -94,6 +97,8 @@ class HeimaEngine:
         self._occupancy_home_no_room_emitted: bool = False
         self._occupancy_room_no_home_since: dict[str, float] = {}
         self._occupancy_room_no_home_emitted: set[str] = set()
+        self._security_armed_away_but_home_since: float | None = None
+        self._security_armed_away_but_home_emitted: bool = False
 
     @property
     def health(self) -> EngineHealth:
@@ -359,6 +364,7 @@ class HeimaEngine:
             security_state=security_state,
             options=options,
             people_home_list=people_home_list,
+            occupied_rooms=occupied_rooms,
         )
 
         return DecisionSnapshot(
@@ -609,28 +615,45 @@ class HeimaEngine:
                 if self._hass.states.get(scene_entity) is None:
                     _LOGGER.warning("Skipping missing scene entity: %s", scene_entity)
                     continue
-
-                await self._hass.services.async_call(
-                    "scene",
-                    "turn_on",
-                    {"entity_id": scene_entity},
-                    blocking=False,
-                )
-                self._mark_scene_applied(step.target, scene_entity)
-                continue
+                try:
+                    await self._hass.services.async_call(
+                        "scene",
+                        "turn_on",
+                        {"entity_id": scene_entity},
+                        blocking=False,
+                    )
+                    self._mark_scene_applied(step.target, scene_entity)
+                    continue
+                except ServiceNotFound:
+                    _LOGGER.warning(
+                        "Skipping lighting apply during startup/race: service scene.turn_on not available"
+                    )
+                    continue
+                except Exception:
+                    _LOGGER.exception("Lighting apply failed for scene '%s'", scene_entity)
+                    continue
 
             if step.action == "light.turn_off":
                 area_id = step.params.get("area_id")
                 if not isinstance(area_id, str) or not area_id:
                     continue
-                await self._hass.services.async_call(
-                    "light",
-                    "turn_off",
-                    {"area_id": area_id},
-                    blocking=False,
-                )
-                self._mark_scene_applied(step.target, f"light.turn_off:area:{area_id}")
-                continue
+                try:
+                    await self._hass.services.async_call(
+                        "light",
+                        "turn_off",
+                        {"area_id": area_id},
+                        blocking=False,
+                    )
+                    self._mark_scene_applied(step.target, f"light.turn_off:area:{area_id}")
+                    continue
+                except ServiceNotFound:
+                    _LOGGER.warning(
+                        "Skipping lighting apply during startup/race: service light.turn_off not available"
+                    )
+                    continue
+                except Exception:
+                    _LOGGER.exception("Lighting apply failed for room area '%s'", area_id)
+                    continue
 
     def _should_apply_scene(self, room_id: str, scene_entity: str) -> bool:
         now = time.monotonic()
@@ -787,10 +810,11 @@ class HeimaEngine:
             if room.get("room_id")
         }
 
+        room_configs = self._room_configs()
         active_room_no_home = set()
         if occupied_rooms and not anyone_home:
             for room_id in occupied_rooms:
-                room_cfg = self._room_config(room_id)
+                room_cfg = room_configs.get(room_id, {})
                 if self._room_occupancy_mode(room_cfg) != "derived":
                     self._reset_persistent_room_condition(room_id)
                     continue
@@ -829,13 +853,35 @@ class HeimaEngine:
         security_state: str,
         options: dict[str, Any],
         people_home_list: list[str],
+        occupied_rooms: list[str],
     ) -> None:
         security_cfg = dict(options.get(OPT_SECURITY, {}))
         if not security_cfg.get("enabled"):
+            self._security_armed_away_but_home_since = None
+            self._security_armed_away_but_home_emitted = False
+            return
+
+        mismatch_cfg = self._security_mismatch_config()
+        policy = mismatch_cfg["policy"]
+        if policy == "off":
+            self._security_armed_away_but_home_since = None
+            self._security_armed_away_but_home_emitted = False
             return
 
         armed_away_value = str(security_cfg.get("armed_away_value", "armed_away"))
-        if security_state == armed_away_value and anyone_home:
+        mismatch_active = security_state == armed_away_value and anyone_home
+        persist_s = 0 if policy == "strict" else mismatch_cfg["persist_s"]
+
+        room_configs = self._room_configs()
+        has_room_evidence = any(
+            self._room_occupancy_mode(room_configs.get(room_id, {})) == "derived"
+            for room_id in occupied_rooms
+        )
+        has_anonymous_evidence = bool(self._state.get_binary("heima_anonymous_presence"))
+        if policy == "smart":
+            mismatch_active = mismatch_active and (has_room_evidence or has_anonymous_evidence)
+
+        if self._persistent_security_mismatch_ready(active=mismatch_active, persist_s=persist_s):
             self._queue_event(
                 HeimaEvent(
                     type="security.armed_away_but_home",
@@ -843,7 +889,15 @@ class HeimaEngine:
                     severity="warn",
                     title="Security inconsistency",
                     message="Security is armed away while someone is home.",
-                    context={"security_state": security_state, "people_home_list": list(people_home_list)},
+                    context={
+                        "security_state": security_state,
+                        "people_home_list": list(people_home_list),
+                        "policy": policy,
+                        "persist_s": persist_s,
+                        "occupied_rooms": list(occupied_rooms),
+                        "has_room_evidence": has_room_evidence,
+                        "has_anonymous_evidence": has_anonymous_evidence,
+                    },
                 )
             )
 
@@ -896,6 +950,16 @@ class HeimaEngine:
             ),
         }
 
+    def _security_mismatch_config(self) -> dict[str, Any]:
+        cfg = self._notifications_config()
+        policy = str(cfg.get("security_mismatch_policy", DEFAULT_SECURITY_MISMATCH_POLICY))
+        if policy not in {"off", "smart", "strict"}:
+            policy = DEFAULT_SECURITY_MISMATCH_POLICY
+        return {
+            "policy": policy,
+            "persist_s": int(cfg.get("security_mismatch_persist_s", DEFAULT_SECURITY_MISMATCH_PERSIST_S)),
+        }
+
     def _persistent_condition_ready(self, *, key: str, active: bool, persist_s: int) -> bool:
         now = time.monotonic()
         if key == "home_no_room":
@@ -933,6 +997,22 @@ class HeimaEngine:
     def _reset_persistent_room_condition(self, room_id: str) -> None:
         self._occupancy_room_no_home_since.pop(room_id, None)
         self._occupancy_room_no_home_emitted.discard(room_id)
+
+    def _persistent_security_mismatch_ready(self, *, active: bool, persist_s: int) -> bool:
+        now = time.monotonic()
+        if not active:
+            self._security_armed_away_but_home_since = None
+            self._security_armed_away_but_home_emitted = False
+            return False
+        if self._security_armed_away_but_home_since is None:
+            self._security_armed_away_but_home_since = now
+            self._security_armed_away_but_home_emitted = False
+        if self._security_armed_away_but_home_emitted:
+            return False
+        if persist_s <= 0 or (now - self._security_armed_away_but_home_since) >= persist_s:
+            self._security_armed_away_but_home_emitted = True
+            return True
+        return False
 
     def _event_category(self, event_type: str) -> str:
         prefix = str(event_type or "").split(".", 1)[0]

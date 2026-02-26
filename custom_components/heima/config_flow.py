@@ -26,10 +26,13 @@ from .const import (
     DEFAULT_OCCUPANCY_MISMATCH_MIN_DERIVED_ROOMS,
     DEFAULT_OCCUPANCY_MISMATCH_PERSIST_S,
     DEFAULT_OCCUPANCY_MISMATCH_POLICY,
+    DEFAULT_SECURITY_MISMATCH_PERSIST_S,
+    DEFAULT_SECURITY_MISMATCH_POLICY,
     DEFAULT_LIGHTING_APPLY_MODE,
     DOMAIN,
     EVENT_CATEGORIES_TOGGLEABLE,
     OCCUPANCY_MISMATCH_POLICIES,
+    SECURITY_MISMATCH_POLICIES,
     OPT_HEATING,
     OPT_LIGHTING_APPLY_MODE,
     OPT_LIGHTING_ROOMS,
@@ -226,6 +229,13 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         )
         data["occupancy_mismatch_persist_s"] = int(
             data.get("occupancy_mismatch_persist_s", DEFAULT_OCCUPANCY_MISMATCH_PERSIST_S)
+        )
+        security_policy = str(data.get("security_mismatch_policy", DEFAULT_SECURITY_MISMATCH_POLICY))
+        if security_policy not in SECURITY_MISMATCH_POLICIES:
+            security_policy = DEFAULT_SECURITY_MISMATCH_POLICY
+        data["security_mismatch_policy"] = security_policy
+        data["security_mismatch_persist_s"] = int(
+            data.get("security_mismatch_persist_s", DEFAULT_SECURITY_MISMATCH_PERSIST_S)
         )
         return data
 
@@ -1042,6 +1052,18 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                     "occupancy_mismatch_persist_s",
                     default=defaults.get(
                         "occupancy_mismatch_persist_s", DEFAULT_OCCUPANCY_MISMATCH_PERSIST_S
+                    ),
+                ): _NON_NEGATIVE_INT,
+                vol.Optional(
+                    "security_mismatch_policy",
+                    default=defaults.get(
+                        "security_mismatch_policy", DEFAULT_SECURITY_MISMATCH_POLICY
+                    ),
+                ): vol.In(SECURITY_MISMATCH_POLICIES),
+                vol.Optional(
+                    "security_mismatch_persist_s",
+                    default=defaults.get(
+                        "security_mismatch_persist_s", DEFAULT_SECURITY_MISMATCH_PERSIST_S
                     ),
                 ): _NON_NEGATIVE_INT,
             }

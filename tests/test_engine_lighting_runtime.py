@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from homeassistant.exceptions import ServiceNotFound
 
 from custom_components.heima.runtime.engine import HeimaEngine
 from custom_components.heima.runtime.snapshot import DecisionSnapshot
@@ -34,10 +35,13 @@ class _FakeBus:
 
 
 class _FakeServices:
-    def __init__(self):
+    def __init__(self, fail_services: set[tuple[str, str]] | None = None):
         self.calls: list[tuple[str, str, dict, bool]] = []
+        self._fail_services = set(fail_services or set())
 
     async def async_call(self, domain, service, data, blocking=False):
+        if (domain, service) in self._fail_services:
+            raise ServiceNotFound(domain, service)
         self.calls.append((domain, service, dict(data), blocking))
 
     def async_services(self):
@@ -48,10 +52,15 @@ def _entry_with_options(options: dict) -> SimpleNamespace:
     return SimpleNamespace(options=options)
 
 
-def _build_engine(options: dict, state_values: dict[str, str] | None = None) -> HeimaEngine:
+def _build_engine(
+    options: dict,
+    state_values: dict[str, str] | None = None,
+    *,
+    fail_services: set[tuple[str, str]] | None = None,
+) -> HeimaEngine:
     hass = SimpleNamespace(
         states=_FakeStates(state_values),
-        services=_FakeServices(),
+        services=_FakeServices(fail_services),
         bus=_FakeBus(),
     )
     engine = HeimaEngine(hass=hass, entry=_entry_with_options(options))
@@ -150,6 +159,76 @@ async def test_off_without_scene_uses_area_light_turn_off_fallback():
         {"area_id": "soggiorno"},
         False,
     )
+
+
+@pytest.mark.asyncio
+async def test_apply_plan_ignores_light_turn_off_service_race():
+    options = {
+        "rooms": [
+            {
+                "room_id": "soggiorno",
+                "area_id": "soggiorno",
+                "occupancy_mode": "none",
+                "sources": [],
+                "logic": "any_of",
+            }
+        ],
+        "lighting_zones": [{"zone_id": "zona", "rooms": ["soggiorno"]}],
+        "lighting_rooms": [{"room_id": "soggiorno", "enable_manual_hold": True}],
+    }
+    engine = _build_engine(options, fail_services={("light", "turn_off")})
+    snapshot = engine._compute_snapshot(reason="test")
+    plan = engine._build_apply_plan(snapshot)
+
+    await engine._execute_apply_plan(plan)
+
+    assert engine._hass.services.calls == []
+
+
+@pytest.mark.asyncio
+async def test_apply_plan_ignores_scene_turn_on_service_race():
+    options = {
+        "rooms": [
+            {
+                "room_id": "soggiorno",
+                "area_id": "soggiorno",
+                "occupancy_mode": "derived",
+                "sources": ["binary_sensor.soggiorno_presence"],
+                "logic": "any_of",
+            }
+        ],
+        "lighting_zones": [{"zone_id": "zona", "rooms": ["soggiorno"]}],
+        "lighting_rooms": [
+            {
+                "room_id": "soggiorno",
+                "scene_evening": "scene.soggiorno_evening",
+                "enable_manual_hold": True,
+            }
+        ],
+    }
+    engine = _build_engine(
+        options,
+        {"scene.soggiorno_evening": "scening"},
+        fail_services={("scene", "turn_on")},
+    )
+    snapshot = DecisionSnapshot(
+        snapshot_id="x",
+        ts="2026-01-01T00:00:00+00:00",
+        house_state="home",
+        anyone_home=True,
+        people_count=1,
+        occupied_rooms=["soggiorno"],
+        lighting_intents={"zona": "scene_evening"},
+        heating_intent="auto",
+        security_state="unknown",
+        notes="test",
+    )
+    plan = engine._build_apply_plan(snapshot)
+    assert len(plan.steps) == 1
+
+    await engine._execute_apply_plan(plan)
+
+    assert engine._hass.services.calls == []
 
 
 @pytest.mark.asyncio
@@ -288,6 +367,11 @@ async def test_security_armed_away_but_home_event_emitted():
             "security_state_entity": "alarm_control_panel.home",
             "armed_away_value": "armed_away",
             "armed_home_value": "armed_home",
+        },
+        "notifications": {
+            "enabled_event_categories": ["security", "people"],
+            "security_mismatch_policy": "strict",
+            "security_mismatch_persist_s": 0,
         },
     }
     engine = _build_engine(options, {"alarm_control_panel.home": "armed_away"})

@@ -19,6 +19,9 @@ This folder contains the canonical, versioned specifications for the Heima Home 
   File: `heima_options_flow_spec_v1.md`
 
 ### Runtime Interfaces
+- **Input Normalization Layer SPEC v1** — Shared facade/contracts for normalized observations and gradual migration from raw HA states  
+  File: `heima_input_normalization_layer_spec_v1.md`
+
 - **Event Catalog SPEC v1** — Standard events, keys, severity, payloads, dedup/rate-limit rules  
   File: `heima_event_catalog_spec_v1.md`
 
@@ -71,6 +74,7 @@ docs/
     heima_spec_v1_1_behavior_framework.md
     heima_options_flow_spec_v1.md
     heima_event_catalog_spec_v1.md
+    heima_input_normalization_layer_spec_v1.md
     heima_mapping_model_spec_v1.md
     heima_extension_strategy_spec_v1_solution_a.md
     INDEX.md
