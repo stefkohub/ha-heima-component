@@ -36,13 +36,14 @@
 - [x] Expand core Event Catalog coverage for `people.*`, `occupancy.*`, `lighting.*`, `security.*`, `system.engine_disabled`.
 - [ ] Complete remaining Event Catalog coverage (`heating.*`, `security.mismatch`, `system.config_invalid`, `system.behavior_error`) and finalize payload standardization.
 
-5. [ ] Cross-Cut — Input Normalization Layer (Incremental Rollout N1-N4)
-- [ ] N1 Foundation: add shared normalization contracts + `InputNormalizer` facade (behavior-preserving legacy-backed adapter).
+5. [ ] Cross-Cut — Input Normalization Layer (Incremental Rollout N1-N5)
+- [x] N1 Foundation: add shared normalization contracts + `InputNormalizer` facade + fusion plugin/strategy registry contract (behavior-preserving legacy-backed adapter).
 - [ ] N1 Migration: route existing runtime raw reads through the facade (no behavioral change intended).
 - [ ] N2 Occupancy: compute room occupancy from normalized presence observations; implement `on_dwell_s` / `off_dwell_s` / `max_on_s`.
 - [ ] N2 Diagnostics: expose normalization trace for occupancy sources (raw_state -> normalized_state/reason).
 - [ ] N3 Security: normalize alarm raw states to canonical security observation; migrate `security.*` consistency logic to normalized inputs.
 - [ ] N4 House Signals + People: normalize house-mode helpers and people source inputs; remove domain-level raw parsing call sites.
+- [ ] N5 Advanced Fusion Plugins: support pluggable signal-combination strategies (rule-based, probabilistic, model-based, etc.) behind the same `DerivedObservation` contract.
 
 6. [ ] Phase 4 — Heating Domain (Safe Apply)
 - Implement base intents (`auto`, `eco`, `comfort`, `preheat`, `off`).
@@ -89,4 +90,4 @@
   - startup race handling for `notify.*` routes with deferred delivery/retry
   - additional event catalog emissions (`people.*`, `house_state.changed`, occupancy inconsistencies, security inconsistency, zone conflicts)
 - Architecture planning:
-  - added Input Normalization Layer mini-spec (shared contracts/facade + incremental rollout N1-N4) to avoid fragmented smart-policy implementations on raw HA states
+  - added Input Normalization Layer mini-spec (shared contracts/facade + plugin-based fusion registry + incremental rollout N1-N5) to avoid fragmented smart-policy implementations on raw HA states
