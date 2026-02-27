@@ -1,0 +1,156 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from custom_components.heima.runtime.engine import HeimaEngine
+
+
+class _FakeStateObj:
+    def __init__(self, state: str):
+        self.state = state
+
+
+class _MutableStates:
+    def __init__(self, values: dict[str, str] | None = None):
+        self._values = dict(values or {})
+
+    def get(self, entity_id: str):
+        value = self._values.get(entity_id)
+        if value is None:
+            return None
+        return _FakeStateObj(value)
+
+    def set(self, entity_id: str, value: str) -> None:
+        self._values[entity_id] = value
+
+
+class _FakeBus:
+    def __init__(self):
+        self.events: list[tuple[str, dict]] = []
+
+    def async_fire(self, event_type, data):
+        self.events.append((event_type, dict(data)))
+        return None
+
+
+class _FakeServices:
+    def __init__(self):
+        self.calls: list[tuple[str, str, dict, bool]] = []
+
+    async def async_call(self, domain, service, data, blocking=False):
+        self.calls.append((domain, service, dict(data), blocking))
+
+    def async_services(self):
+        return {"notify": {}}
+
+
+def _engine(states: _MutableStates, options: dict) -> HeimaEngine:
+    hass = SimpleNamespace(states=states, services=_FakeServices(), bus=_FakeBus())
+    engine = HeimaEngine(hass=hass, entry=SimpleNamespace(options=options))
+    engine._build_default_state()
+    return engine
+
+
+@pytest.mark.asyncio
+async def test_room_on_dwell_delays_transition_from_off_to_on(monkeypatch):
+    t = 0.0
+    monkeypatch.setattr("custom_components.heima.runtime.engine.time.monotonic", lambda: t)
+    states = _MutableStates({"binary_sensor.room_presence": "off"})
+    engine = _engine(
+        states,
+        {
+            "rooms": [
+                {
+                    "room_id": "room",
+                    "occupancy_mode": "derived",
+                    "sources": ["binary_sensor.room_presence"],
+                    "logic": "any_of",
+                    "on_dwell_s": 10,
+                    "off_dwell_s": 0,
+                }
+            ]
+        },
+    )
+
+    snap = engine._compute_snapshot(reason="t0")
+    assert "room" not in snap.occupied_rooms
+
+    t = 1.0
+    states.set("binary_sensor.room_presence", "on")
+    snap = engine._compute_snapshot(reason="t1")
+    assert "room" not in snap.occupied_rooms
+
+    t = 12.0
+    snap = engine._compute_snapshot(reason="t12")
+    assert "room" in snap.occupied_rooms
+
+
+@pytest.mark.asyncio
+async def test_room_off_dwell_delays_transition_from_on_to_off(monkeypatch):
+    t = 0.0
+    monkeypatch.setattr("custom_components.heima.runtime.engine.time.monotonic", lambda: t)
+    states = _MutableStates({"binary_sensor.room_presence": "on"})
+    engine = _engine(
+        states,
+        {
+            "rooms": [
+                {
+                    "room_id": "room",
+                    "occupancy_mode": "derived",
+                    "sources": ["binary_sensor.room_presence"],
+                    "logic": "any_of",
+                    "on_dwell_s": 0,
+                    "off_dwell_s": 10,
+                }
+            ]
+        },
+    )
+
+    snap = engine._compute_snapshot(reason="t0")
+    assert "room" in snap.occupied_rooms
+
+    t = 1.0
+    states.set("binary_sensor.room_presence", "off")
+    snap = engine._compute_snapshot(reason="t1")
+    assert "room" in snap.occupied_rooms
+
+    t = 12.0
+    snap = engine._compute_snapshot(reason="t12")
+    assert "room" not in snap.occupied_rooms
+
+
+@pytest.mark.asyncio
+async def test_room_max_on_forces_off_and_emits_event(monkeypatch):
+    t = 0.0
+    monkeypatch.setattr("custom_components.heima.runtime.engine.time.monotonic", lambda: t)
+    states = _MutableStates({"binary_sensor.room_presence": "on"})
+    engine = _engine(
+        states,
+        {
+            "rooms": [
+                {
+                    "room_id": "room",
+                    "occupancy_mode": "derived",
+                    "sources": ["binary_sensor.room_presence"],
+                    "logic": "any_of",
+                    "on_dwell_s": 0,
+                    "off_dwell_s": 0,
+                    "max_on_s": 5,
+                }
+            ]
+        },
+    )
+
+    snap = engine._compute_snapshot(reason="t0")
+    assert "room" in snap.occupied_rooms
+
+    t = 6.0
+    snap = engine._compute_snapshot(reason="t6")
+    assert "room" not in snap.occupied_rooms
+    await engine._emit_queued_events()
+
+    event_types = [p["type"] for e, p in engine._hass.bus.events if e == "heima_event"]
+    assert "occupancy.max_on_timeout" in event_types
+

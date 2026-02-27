@@ -40,10 +40,11 @@
 - [x] N1 Foundation: add shared normalization contracts + `InputNormalizer` facade + fusion plugin/strategy registry contract (behavior-preserving legacy-backed adapter).
 - [x] N1 Migration: route existing runtime raw reads through the facade (no behavioral change intended).
 - [ ] N2 Occupancy: compute room occupancy from normalized presence observations; implement `on_dwell_s` / `off_dwell_s` / `max_on_s`.
-- [ ] N2 Occupancy (operational): move room fusion to registry (`builtin.any_of` / `builtin.all_of`) and use `DerivedObservation` in occupancy decisions.
-- [ ] N2 Occupancy (operational): implement dwell runtime state machine (`candidate_state/since`, `effective_state/since`) per derived room.
-- [ ] N2 Occupancy (operational): enforce `max_on_s` timeout with explicit event/diagnostics trace.
-- [ ] N2 Diagnostics: expose normalization trace for occupancy sources (raw_state -> normalized_state/reason).
+- [x] N2 Occupancy: compute room occupancy from normalized presence observations; implement `on_dwell_s` / `off_dwell_s` / `max_on_s`.
+- [x] N2 Occupancy (operational): move room fusion to registry (`builtin.any_of` / `builtin.all_of`) and use `DerivedObservation` in occupancy decisions.
+- [x] N2 Occupancy (operational): implement dwell runtime state machine (`candidate_state/since`, `effective_state/since`) per derived room.
+- [x] N2 Occupancy (operational): enforce `max_on_s` timeout with explicit event/diagnostics trace.
+- [x] N2 Diagnostics: expose normalization trace for occupancy sources (raw_state -> normalized_state/reason).
 - [ ] N3 Security: normalize alarm raw states to canonical security observation; migrate `security.*` consistency logic to normalized inputs.
 - [ ] N4 House Signals + People: normalize house-mode helpers and people source inputs; remove domain-level raw parsing call sites.
 - [ ] N5 Plugin Ecosystem Expansion: add advanced built-ins + external strategy providers behind the same `DerivedObservation` contract.

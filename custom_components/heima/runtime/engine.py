@@ -89,6 +89,11 @@ class HeimaEngine:
         self._occupancy_home_no_room_emitted: bool = False
         self._occupancy_room_no_home_since: dict[str, float] = {}
         self._occupancy_room_no_home_emitted: set[str] = set()
+        self._occupancy_room_candidate_state: dict[str, str] = {}
+        self._occupancy_room_candidate_since: dict[str, float] = {}
+        self._occupancy_room_effective_state: dict[str, str] = {}
+        self._occupancy_room_effective_since: dict[str, float] = {}
+        self._occupancy_room_trace: dict[str, dict[str, Any]] = {}
         self._security_armed_away_but_home_since: float | None = None
         self._security_armed_away_but_home_emitted: bool = False
 
@@ -287,16 +292,16 @@ class HeimaEngine:
             room_id = room.get("room_id")
             if not room_id:
                 continue
-            occupancy_mode = self._room_occupancy_mode(room)
-            is_occupied = self._compute_room_occupancy(room)
+            is_occupied, occ_trace = self._compute_room_occupancy(room)
             prev_value = self._state.get_binary(f"heima_occ_{room_id}")
             self._state.set_binary(f"heima_occ_{room_id}", is_occupied)
             self._state.set_sensor(
                 f"heima_occ_{room_id}_source",
-                "none" if occupancy_mode == "none" else ",".join(room.get("sources", [])),
+                "none" if self._room_occupancy_mode(room) == "none" else ",".join(room.get("sources", [])),
             )
             if prev_value != is_occupied:
                 self._state.set_sensor(f"heima_occ_{room_id}_last_change", now)
+            self._occupancy_room_trace[str(room_id)] = occ_trace
             if is_occupied:
                 occupied_rooms.append(room_id)
 
@@ -1127,16 +1132,116 @@ class HeimaEngine:
                 active += 1
         return active >= max(1, required), active
 
-    def _compute_room_occupancy(self, room_cfg: dict[str, Any]) -> bool:
-        if self._room_occupancy_mode(room_cfg) == "none":
-            return False
-        sources = list(room_cfg.get("sources", []))
-        logic = room_cfg.get("logic", "any_of")
-        if not sources:
-            return False
+    def _compute_room_occupancy(self, room_cfg: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+        room_id = str(room_cfg.get("room_id", ""))
+        mode = self._room_occupancy_mode(room_cfg)
+        if mode == "none":
+            return False, {
+                "room_id": room_id,
+                "occupancy_mode": "none",
+                "source_observations": [],
+                "fused_observation": None,
+                "plugin_id": None,
+                "candidate_state": "off",
+                "candidate_since": None,
+                "effective_state": "off",
+                "effective_since": None,
+                "on_dwell_s": None,
+                "off_dwell_s": None,
+                "max_on_s": None,
+                "forced_off_by_max_on": False,
+            }
 
-        values = [self._is_presence_on(entity_id) for entity_id in sources]
-        return all(values) if logic == "all_of" else any(values)
+        sources = list(room_cfg.get("sources", []))
+        if not sources:
+            return False, {
+                "room_id": room_id,
+                "occupancy_mode": mode,
+                "source_observations": [],
+                "fused_observation": None,
+                "plugin_id": None,
+                "candidate_state": "unknown",
+                "candidate_since": None,
+                "effective_state": "off",
+                "effective_since": None,
+                "on_dwell_s": int(room_cfg.get("on_dwell_s", 5)),
+                "off_dwell_s": int(room_cfg.get("off_dwell_s", 120)),
+                "max_on_s": room_cfg.get("max_on_s"),
+                "forced_off_by_max_on": False,
+            }
+
+        logic = str(room_cfg.get("logic", "any_of"))
+        plugin_id = "builtin.all_of" if logic == "all_of" else "builtin.any_of"
+
+        observations = [self._normalizer.presence(entity_id) for entity_id in sources]
+        fused = self._normalizer.derive(
+            kind="presence",
+            inputs=observations,
+            strategy_cfg={"plugin_id": plugin_id},
+            context={"room_id": room_id},
+        )
+
+        candidate_state = fused.state if fused.state in {"on", "off"} else "unknown"
+        now = time.monotonic()
+        previous_candidate = self._occupancy_room_candidate_state.get(room_id)
+        if previous_candidate != candidate_state:
+            self._occupancy_room_candidate_state[room_id] = candidate_state
+            self._occupancy_room_candidate_since[room_id] = now
+
+        candidate_since = self._occupancy_room_candidate_since.get(room_id, now)
+        on_dwell_s = int(room_cfg.get("on_dwell_s", 5))
+        off_dwell_s = int(room_cfg.get("off_dwell_s", 120))
+        max_on_s_raw = room_cfg.get("max_on_s")
+        max_on_s = int(max_on_s_raw) if max_on_s_raw not in (None, "") else None
+
+        effective_state = self._occupancy_room_effective_state.get(room_id)
+        if effective_state is None:
+            effective_state = "on" if candidate_state == "on" else "off"
+            self._occupancy_room_effective_state[room_id] = effective_state
+            self._occupancy_room_effective_since[room_id] = now
+        elif candidate_state in {"on", "off"} and candidate_state != effective_state:
+            dwell = on_dwell_s if candidate_state == "on" else off_dwell_s
+            if (now - candidate_since) >= max(0, dwell):
+                effective_state = candidate_state
+                self._occupancy_room_effective_state[room_id] = effective_state
+                self._occupancy_room_effective_since[room_id] = now
+
+        forced_off_by_max_on = False
+        effective_since = self._occupancy_room_effective_since.get(room_id, now)
+        if max_on_s is not None and max_on_s > 0 and effective_state == "on":
+            if (now - effective_since) >= max_on_s:
+                forced_off_by_max_on = True
+                effective_state = "off"
+                self._occupancy_room_effective_state[room_id] = "off"
+                self._occupancy_room_effective_since[room_id] = now
+                self._queue_event(
+                    HeimaEvent(
+                        type="occupancy.max_on_timeout",
+                        key=f"occupancy.max_on_timeout.{room_id}",
+                        severity="info",
+                        title="Room occupancy max-on timeout",
+                        message=f"Room '{room_id}' occupancy forced off after max_on_s timeout.",
+                        context={"room": room_id, "max_on_s": max_on_s},
+                    )
+                )
+        effective_since = self._occupancy_room_effective_since.get(room_id, now)
+
+        trace = {
+            "room_id": room_id,
+            "occupancy_mode": mode,
+            "source_observations": [obs.as_dict() for obs in observations],
+            "fused_observation": fused.as_dict(),
+            "plugin_id": fused.plugin_id,
+            "candidate_state": candidate_state,
+            "candidate_since": candidate_since,
+            "effective_state": effective_state,
+            "effective_since": effective_since,
+            "on_dwell_s": on_dwell_s,
+            "off_dwell_s": off_dwell_s,
+            "max_on_s": max_on_s,
+            "forced_off_by_max_on": forced_off_by_max_on,
+        }
+        return effective_state == "on", trace
 
     def _is_entity_home(self, entity_id: str | None) -> bool:
         if not entity_id:
@@ -1200,4 +1305,7 @@ class HeimaEngine:
                 "hold_seen_state_by_room": dict(self._lighting_hold_seen_state),
             },
             "events": self._events.stats.as_dict(),
+            "occupancy": {
+                "room_trace": dict(self._occupancy_room_trace),
+            },
         }
