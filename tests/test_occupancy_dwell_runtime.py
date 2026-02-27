@@ -81,10 +81,13 @@ async def test_room_on_dwell_delays_transition_from_off_to_on(monkeypatch):
     states.set("binary_sensor.room_presence", "on")
     snap = engine._compute_snapshot(reason="t1")
     assert "room" not in snap.occupied_rooms
+    delay = engine.next_dwell_recheck_delay_s()
+    assert delay is not None and delay > 0
 
     t = 12.0
     snap = engine._compute_snapshot(reason="t12")
     assert "room" in snap.occupied_rooms
+    assert engine.next_dwell_recheck_delay_s() is None
 
 
 @pytest.mark.asyncio
@@ -153,4 +156,3 @@ async def test_room_max_on_forces_off_and_emits_event(monkeypatch):
 
     event_types = [p["type"] for e, p in engine._hass.bus.events if e == "heima_event"]
     assert "occupancy.max_on_timeout" in event_types
-

@@ -94,6 +94,7 @@ class HeimaEngine:
         self._occupancy_room_effective_state: dict[str, str] = {}
         self._occupancy_room_effective_since: dict[str, float] = {}
         self._occupancy_room_trace: dict[str, dict[str, Any]] = {}
+        self._next_dwell_recheck_at: float | None = None
         self._security_observation_trace: dict[str, Any] = {}
         self._security_armed_away_but_home_since: float | None = None
         self._security_armed_away_but_home_emitted: bool = False
@@ -235,6 +236,7 @@ class HeimaEngine:
     def _compute_snapshot(self, reason: str) -> DecisionSnapshot:
         options = dict(self._entry.options)
         now = datetime.now(timezone.utc).isoformat()
+        self._next_dwell_recheck_at = None
 
         named_people = options.get(OPT_PEOPLE_NAMED, [])
         home_people: list[str] = []
@@ -393,6 +395,12 @@ class HeimaEngine:
             security_state=security_state,
             notes=f"reason={reason}",
         )
+
+    def next_dwell_recheck_delay_s(self) -> float | None:
+        """Return seconds until next dwell recheck should be evaluated."""
+        if self._next_dwell_recheck_at is None:
+            return None
+        return max(0.0, self._next_dwell_recheck_at - time.monotonic())
 
     def _compute_lighting_intents(self, house_state: str, occupied_rooms: list[str]) -> dict[str, str]:
         options = dict(self._entry.options)
@@ -1222,10 +1230,15 @@ class HeimaEngine:
             self._occupancy_room_effective_since[room_id] = now
         elif candidate_state in {"on", "off"} and candidate_state != effective_state:
             dwell = on_dwell_s if candidate_state == "on" else off_dwell_s
-            if (now - candidate_since) >= max(0, dwell):
+            dwell = max(0, dwell)
+            if (now - candidate_since) >= dwell:
                 effective_state = candidate_state
                 self._occupancy_room_effective_state[room_id] = effective_state
                 self._occupancy_room_effective_since[room_id] = now
+            elif dwell > 0:
+                deadline = candidate_since + dwell
+                if self._next_dwell_recheck_at is None or deadline < self._next_dwell_recheck_at:
+                    self._next_dwell_recheck_at = deadline
 
         forced_off_by_max_on = False
         effective_since = self._occupancy_room_effective_since.get(room_id, now)
