@@ -45,8 +45,8 @@
 - [x] N2 Occupancy (operational): implement dwell runtime state machine (`candidate_state/since`, `effective_state/since`) per derived room.
 - [x] N2 Occupancy (operational): enforce `max_on_s` timeout with explicit event/diagnostics trace.
 - [x] N2 Diagnostics: expose normalization trace for occupancy sources (raw_state -> normalized_state/reason).
-- [ ] N3 Security: normalize alarm raw states to canonical security observation; migrate `security.*` consistency logic to normalized inputs.
-- [ ] N4 House Signals + People: normalize house-mode helpers and people source inputs; remove domain-level raw parsing call sites.
+- [x] N3 Security: normalize alarm raw states to canonical security observation; migrate `security.*` consistency logic to normalized inputs.
+- [x] N4 House Signals + People: normalize house-mode helpers and people source inputs; remove domain-level raw parsing call sites.
 - [ ] N5 Plugin Ecosystem Expansion: add advanced built-ins + external strategy providers behind the same `DerivedObservation` contract.
 
 6. [ ] Phase 4 — Heating Domain (Safe Apply)

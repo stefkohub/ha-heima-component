@@ -148,3 +148,28 @@ async def test_security_mismatch_strict_emits_immediately_without_corroboration(
 
     assert "security.armed_away_but_home" in _event_types(engine)
 
+
+@pytest.mark.asyncio
+async def test_security_mismatch_uses_normalized_custom_armed_away_mapping(monkeypatch):
+    monkeypatch.setattr("custom_components.heima.runtime.engine.time.monotonic", lambda: 100.0)
+    options = _base_options(
+        {
+            "enabled_event_categories": ["security", "people"],
+            "security_mismatch_policy": "strict",
+            "security_mismatch_persist_s": 999,
+        }
+    )
+    options["security"]["armed_away_value"] = "armed_away_custom"
+    options["security"]["armed_home_value"] = "armed_home_custom"
+    engine = _engine(
+        options,
+        {
+            "alarm_control_panel.home": "armed_away_custom",
+            "binary_sensor.soggiorno_presence": "off",
+        },
+    )
+    engine.state.set_select("heima_person_stefano_override", "force_home")
+
+    await _eval(engine)
+
+    assert "security.armed_away_but_home" in _event_types(engine)

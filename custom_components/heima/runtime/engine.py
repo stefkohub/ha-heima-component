@@ -94,6 +94,7 @@ class HeimaEngine:
         self._occupancy_room_effective_state: dict[str, str] = {}
         self._occupancy_room_effective_since: dict[str, float] = {}
         self._occupancy_room_trace: dict[str, dict[str, Any]] = {}
+        self._security_observation_trace: dict[str, Any] = {}
         self._security_armed_away_but_home_since: float | None = None
         self._security_armed_away_but_home_emitted: bool = False
 
@@ -309,10 +310,26 @@ class HeimaEngine:
         security_state = "unknown"
         security_reason = "disabled"
         if security_cfg.get("enabled"):
-            security_state = self._read_state(str(security_cfg.get("security_state_entity", ""))) or "unknown"
-            security_reason = "bound_entity"
+            entity_id = str(security_cfg.get("security_state_entity", ""))
+            security_obs = self._normalizer.security(
+                entity_id,
+                {
+                    "armed_away_value": security_cfg.get("armed_away_value", "armed_away"),
+                    "armed_home_value": security_cfg.get("armed_home_value", "armed_home"),
+                },
+            )
+            security_state = security_obs.state
+            security_reason = security_obs.reason or "normalized"
+            self._security_observation_trace = security_obs.as_dict()
             self._state.set_sensor("heima_security_state", security_state)
             self._state.set_sensor("heima_security_reason", security_reason)
+        else:
+            self._security_observation_trace = {
+                "state": "unknown",
+                "reason": "disabled",
+                "available": False,
+                "source_entity_id": None,
+            }
 
         vacation_mode = self._is_on_any(["input_boolean.vacation_mode"])
         guest_mode = self._is_on_any(["input_boolean.guest_mode"])
@@ -865,8 +882,7 @@ class HeimaEngine:
             self._security_armed_away_but_home_emitted = False
             return
 
-        armed_away_value = str(security_cfg.get("armed_away_value", "armed_away"))
-        mismatch_active = security_state == armed_away_value and anyone_home
+        mismatch_active = security_state == "armed_away" and anyone_home
         persist_s = 0 if policy == "strict" else mismatch_cfg["persist_s"]
 
         room_configs = self._room_configs()
@@ -888,6 +904,7 @@ class HeimaEngine:
                     message="Security is armed away while someone is home.",
                     context={
                         "security_state": security_state,
+                        "security_observation_reason": self._security_observation_trace.get("reason"),
                         "people_home_list": list(people_home_list),
                         "policy": policy,
                         "persist_s": persist_s,
@@ -1126,11 +1143,15 @@ class HeimaEngine:
         return False, "manual", 0
 
     def _compute_group_presence(self, sources: list[str], required: int) -> tuple[bool, int]:
-        active = 0
-        for entity_id in sources:
-            if self._is_presence_on(entity_id):
-                active += 1
-        return active >= max(1, required), active
+        observations = [self._normalizer.presence(entity_id) for entity_id in sources]
+        active_count = sum(1 for obs in observations if obs.state == "on")
+        fused = self._normalizer.derive(
+            kind="presence",
+            inputs=observations,
+            strategy_cfg={"plugin_id": "builtin.quorum", "required": int(required)},
+            context={"source": "group_presence"},
+        )
+        return fused.state == "on", active_count
 
     def _compute_room_occupancy(self, room_cfg: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         room_id = str(room_cfg.get("room_id", ""))
@@ -1244,22 +1265,13 @@ class HeimaEngine:
         return effective_state == "on", trace
 
     def _is_entity_home(self, entity_id: str | None) -> bool:
-        if not entity_id:
-            return False
-        state = self._read_state(entity_id)
-        return state == "home"
+        return self._normalizer.presence(entity_id).state == "on"
 
     def _is_presence_on(self, entity_id: str | None) -> bool:
         return self._normalizer.presence(entity_id).state == "on"
 
     def _is_on_any(self, entity_ids: list[str]) -> bool:
         return any(self._normalizer.boolean_signal(entity_id).state == "on" for entity_id in entity_ids)
-
-    def _read_state(self, entity_id: str | None) -> str | None:
-        if not entity_id:
-            return None
-        state = self._hass.states.get(entity_id)
-        return state.state if state else None
 
     def _apply_snapshot_to_canonical_state(self, snapshot: DecisionSnapshot) -> None:
         for zone_id in list(snapshot.lighting_intents.keys()):
@@ -1307,5 +1319,8 @@ class HeimaEngine:
             "events": self._events.stats.as_dict(),
             "occupancy": {
                 "room_trace": dict(self._occupancy_room_trace),
+            },
+            "security": {
+                "observation_trace": dict(self._security_observation_trace),
             },
         }
