@@ -46,6 +46,15 @@ def _mk_derived(
     )
 
 
+def _input_weight(obs: NormalizedObservation, *, index: int, weights: dict[str, Any]) -> float:
+    ref = obs.source_entity_id or f"input_{index}"
+    value = weights.get(ref, weights.get(str(index), 1))
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 1.0
+
+
 @dataclass(frozen=True)
 class DirectFusionPlugin:
     plugin_id: str = "builtin.direct"
@@ -161,10 +170,101 @@ class BooleanSetFusionPlugin:
         )
 
 
+@dataclass(frozen=True)
+class WeightedQuorumFusionPlugin:
+    """Built-in weighted quorum on on/off/unknown observations."""
+
+    plugin_id: str = "builtin.weighted_quorum"
+    plugin_api_version: int = 1
+    supported_kinds: tuple[str, ...] = ("presence", "boolean_signal")
+
+    def derive(
+        self,
+        *,
+        kind: str,
+        inputs: list[NormalizedObservation],
+        strategy_cfg: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> DerivedObservation:
+        strategy_cfg = dict(strategy_cfg or {})
+        if not inputs:
+            return _mk_derived(
+                kind=kind,
+                state="unknown",
+                confidence=0,
+                inputs=[],
+                strategy="weighted_quorum",
+                plugin_id=self.plugin_id,
+                reason="no_inputs",
+                available=False,
+            )
+
+        weights_cfg = dict(strategy_cfg.get("weights", {}))
+        weighted_inputs = [
+            (obs, _input_weight(obs, index=index, weights=weights_cfg))
+            for index, obs in enumerate(inputs)
+        ]
+        total_weight = sum(weight for _, weight in weighted_inputs)
+        threshold = strategy_cfg.get("threshold")
+        if threshold is None:
+            threshold_value = total_weight / 2.0 if total_weight > 0 else 0.0
+        else:
+            try:
+                threshold_value = max(0.0, float(threshold))
+            except (TypeError, ValueError):
+                threshold_value = total_weight / 2.0 if total_weight > 0 else 0.0
+
+        on_weight = sum(weight for obs, weight in weighted_inputs if obs.state == "on")
+        off_weight = sum(weight for obs, weight in weighted_inputs if obs.state == "off")
+        unknown_weight = sum(weight for obs, weight in weighted_inputs if obs.state not in {"on", "off"})
+
+        if on_weight >= threshold_value:
+            state = "on"
+            reason = "weighted_threshold_reached"
+        elif unknown_weight > 0:
+            state = "unknown"
+            reason = "weighted_threshold_not_reached_with_unknowns"
+        else:
+            state = "off"
+            reason = "weighted_threshold_not_reached"
+
+        if total_weight <= 0:
+            confidence = 0
+        elif state == "on":
+            confidence = int((on_weight / total_weight) * 100)
+        elif state == "off":
+            confidence = int((off_weight / total_weight) * 100)
+        else:
+            confidence = 0
+
+        return _mk_derived(
+            kind=kind,
+            state=state,
+            confidence=confidence,
+            inputs=inputs,
+            strategy="weighted_quorum",
+            plugin_id=self.plugin_id,
+            reason=reason,
+            evidence={
+                "total_weight": total_weight,
+                "threshold": threshold_value,
+                "on_weight": on_weight,
+                "off_weight": off_weight,
+                "unknown_weight": unknown_weight,
+                "weights": {
+                    (obs.source_entity_id or f"input_{idx}"): weight
+                    for idx, (obs, weight) in enumerate(weighted_inputs)
+                },
+            },
+            available=all(obs.available for obs, _ in weighted_inputs),
+            stale=any(obs.stale for obs, _ in weighted_inputs),
+        )
+
+
 def register_builtin_fusion_plugins(registry) -> None:
     """Register the built-in strategies into a registry instance."""
     registry.register(DirectFusionPlugin())
     registry.register(BooleanSetFusionPlugin(plugin_id="builtin.any_of", strategy_name="any_of"))
     registry.register(BooleanSetFusionPlugin(plugin_id="builtin.all_of", strategy_name="all_of"))
     registry.register(BooleanSetFusionPlugin(plugin_id="builtin.quorum", strategy_name="quorum"))
-
+    registry.register(WeightedQuorumFusionPlugin())

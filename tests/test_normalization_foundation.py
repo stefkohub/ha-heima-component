@@ -69,7 +69,13 @@ def test_builtin_registry_has_core_plugins():
     reg = NormalizationFusionRegistry()
     register_builtin_fusion_plugins(reg)
     ids = {d.plugin_id for d in reg.descriptors()}
-    assert {"builtin.direct", "builtin.any_of", "builtin.all_of", "builtin.quorum"} <= ids
+    assert {
+        "builtin.direct",
+        "builtin.any_of",
+        "builtin.all_of",
+        "builtin.quorum",
+        "builtin.weighted_quorum",
+    } <= ids
 
 
 def test_derive_any_of_via_facade_uses_registry_plugin():
@@ -109,3 +115,51 @@ def test_registry_rejects_duplicate_plugin_registration():
     with pytest.raises(ValueError):
         register_builtin_fusion_plugins(reg)
 
+
+def test_derive_weighted_quorum_via_facade_uses_weights_and_threshold():
+    normalizer = InputNormalizer(_hass())
+    inputs = [
+        build_observation(
+            kind="presence",
+            state="on",
+            confidence=100,
+            raw_state="on",
+            source_entity_id="binary_sensor.a",
+            reason="test",
+        ),
+        build_observation(
+            kind="presence",
+            state="off",
+            confidence=100,
+            raw_state="off",
+            source_entity_id="binary_sensor.b",
+            reason="test",
+        ),
+        build_observation(
+            kind="presence",
+            state="off",
+            confidence=100,
+            raw_state="off",
+            source_entity_id="binary_sensor.c",
+            reason="test",
+        ),
+    ]
+    result = normalizer.derive(
+        kind="presence",
+        inputs=inputs,
+        strategy_cfg={
+            "plugin_id": "builtin.weighted_quorum",
+            "threshold": 0.7,
+            "weights": {
+                "binary_sensor.a": 0.8,
+                "binary_sensor.b": 0.1,
+                "binary_sensor.c": 0.1,
+            },
+        },
+    )
+    assert isinstance(result, DerivedObservation)
+    assert result.state == "on"
+    assert result.fusion_strategy == "weighted_quorum"
+    assert result.plugin_id == "builtin.weighted_quorum"
+    assert result.evidence["on_weight"] == 0.8
+    assert result.evidence["threshold"] == 0.7
