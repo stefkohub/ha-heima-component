@@ -232,3 +232,30 @@ def test_derive_plugin_exception_falls_back_to_unknown_and_records_plugin_error(
     assert diagnostics["derive_plugin_errors"] == 1
     assert diagnostics["derive_plugin_error_counts"]["test.exploding"] == 1
     assert diagnostics["last_plugin_error"]["plugin_id"] == "test.exploding"
+
+
+def test_derive_plugin_failure_supports_explicit_off_fallback_state():
+    normalizer = InputNormalizer(_hass())
+    inputs = [
+        build_observation(
+            kind="presence",
+            state="on",
+            confidence=100,
+            raw_state="on",
+            source_entity_id="binary_sensor.a",
+            reason="test",
+        )
+    ]
+
+    result = normalizer.derive(
+        kind="presence",
+        inputs=inputs,
+        strategy_cfg={"plugin_id": "missing.plugin", "fallback_state": "off"},
+    )
+
+    assert result.state == "off"
+    assert result.reason == "plugin_error_fallback"
+    assert result.fusion_strategy == "fallback_off"
+    assert result.evidence["fallback"] == "off"
+    diagnostics = normalizer.diagnostics()
+    assert diagnostics["last_derive"]["fallback_state"] == "off"

@@ -235,6 +235,7 @@ class InputNormalizer:
     ) -> DerivedObservation:
         cfg = dict(strategy_cfg or {})
         plugin_id = str(cfg.pop("plugin_id", "builtin.direct"))
+        fallback_state = self._normalize_fallback_state(cfg.pop("fallback_state", "unknown"))
         normalized_inputs = list(inputs)
         self._derive_calls += 1
         try:
@@ -260,6 +261,7 @@ class InputNormalizer:
                 inputs=normalized_inputs,
                 plugin_id=plugin_id,
                 error=err,
+                fallback_state=fallback_state,
             )
 
         self._last_derive = {
@@ -268,6 +270,7 @@ class InputNormalizer:
             "result_state": result.state,
             "result_reason": result.reason,
             "used_fallback": result.reason == "plugin_error_fallback",
+            "fallback_state": result.evidence.get("fallback") if isinstance(result.evidence, dict) else None,
         }
         return result
 
@@ -302,10 +305,11 @@ class InputNormalizer:
         inputs: list[NormalizedObservation],
         plugin_id: str,
         error: Exception,
+        fallback_state: str,
     ) -> DerivedObservation:
         return DerivedObservation(
             kind=kind,
-            state="unknown",
+            state=fallback_state,
             confidence=0,
             raw_state=None,
             source_entity_id=None,
@@ -313,12 +317,18 @@ class InputNormalizer:
             stale=any(obs.stale for obs in inputs),
             reason="plugin_error_fallback",
             inputs=[obs.source_entity_id or f"{obs.kind}:{obs.state}" for obs in inputs],
-            fusion_strategy="fallback_unknown",
+            fusion_strategy=f"fallback_{fallback_state}",
             plugin_id=plugin_id,
             plugin_api_version=1,
             evidence={
-                "fallback": "unknown",
+                "fallback": fallback_state,
                 "error_type": type(error).__name__,
                 "error": str(error),
             },
         )
+
+    def _normalize_fallback_state(self, value: Any) -> str:
+        lowered = str(value or "unknown").strip().lower()
+        if lowered in {"on", "off", "unknown"}:
+            return lowered
+        return "unknown"
