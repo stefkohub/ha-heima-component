@@ -7,8 +7,14 @@ from custom_components.heima.runtime.normalization.contracts import build_observ
 
 
 class _FakeStates:
+    def __init__(self, values: dict[str, str] | None = None):
+        self._values = dict(values or {})
+
     def get(self, entity_id: str):
-        return None
+        value = self._values.get(entity_id)
+        if value is None:
+            return None
+        return SimpleNamespace(state=value)
 
 
 class _FakeServices:
@@ -85,8 +91,8 @@ class _FailSafeCaptureNormalizer(_FakeNormalizer):
         )
 
 
-def _engine() -> HeimaEngine:
-    hass = SimpleNamespace(states=_FakeStates(), services=_FakeServices(), bus=_FakeBus())
+def _engine(state_values: dict[str, str] | None = None) -> HeimaEngine:
+    hass = SimpleNamespace(states=_FakeStates(state_values), services=_FakeServices(), bus=_FakeBus())
     return HeimaEngine(hass=hass, entry=SimpleNamespace(options={}))
 
 
@@ -176,3 +182,28 @@ def test_compute_group_presence_requests_fail_safe_off_fallback():
             },
         )
     ]
+
+
+def test_compute_group_presence_records_local_trace():
+    engine = _engine(
+        {
+            "binary_sensor.room": "on",
+            "binary_sensor.other": "off",
+        }
+    )
+
+    is_home, active_count = engine._compute_group_presence(
+        ["binary_sensor.room", "binary_sensor.other"],
+        required=1,
+        trace_key="person:stefano",
+    )
+
+    assert is_home is True
+    assert active_count == 1
+    diagnostics = engine.diagnostics()
+    trace = diagnostics["presence"]["group_trace"]["person:stefano"]
+    assert trace["plugin_id"] == "builtin.quorum"
+    assert trace["required"] == 1
+    assert trace["active_count"] == 1
+    assert trace["used_plugin_fallback"] is False
+    assert trace["fused_observation"]["state"] == "on"

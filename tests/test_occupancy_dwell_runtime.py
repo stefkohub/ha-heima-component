@@ -208,6 +208,7 @@ async def test_room_weighted_quorum_uses_threshold_for_effective_occupancy(monke
     trace = engine.diagnostics()["occupancy"]["room_trace"]["room"]
     assert trace["plugin_id"] == "builtin.weighted_quorum"
     assert trace["fused_observation"]["fusion_strategy"] == "weighted_quorum"
+    assert trace["used_plugin_fallback"] is False
 
 
 @pytest.mark.asyncio
@@ -290,6 +291,7 @@ async def test_room_occupancy_fusion_failure_uses_fail_safe_off_fallback(monkeyp
     assert "room" not in snap.occupied_rooms
     trace = engine.diagnostics()["occupancy"]["room_trace"]["room"]
     assert trace["plugin_id"] == "builtin.any_of"
+    assert trace["used_plugin_fallback"] is True
     assert trace["fused_observation"]["state"] == "off"
     assert trace["fused_observation"]["reason"] == "plugin_error_fallback"
     assert trace["fused_observation"]["evidence"]["fallback"] == "off"

@@ -94,6 +94,7 @@ class HeimaEngine:
         self._occupancy_room_effective_state: dict[str, str] = {}
         self._occupancy_room_effective_since: dict[str, float] = {}
         self._occupancy_room_trace: dict[str, dict[str, Any]] = {}
+        self._group_presence_trace: dict[str, dict[str, Any]] = {}
         self._next_timed_recheck_at: float | None = None
         self._security_observation_trace: dict[str, Any] = {}
         self._security_armed_away_but_home_since: float | None = None
@@ -269,7 +270,11 @@ class HeimaEngine:
         if anon_cfg.get("enabled"):
             anon_sources = list(anon_cfg.get("sources", []))
             required = int(anon_cfg.get("required", 1))
-            anon_home, active_count = self._compute_group_presence(anon_sources, required)
+            anon_home, active_count = self._compute_group_presence(
+                anon_sources,
+                required,
+                trace_key="anonymous",
+            )
             anon_confidence = 100 if anon_home else 0
             anon_source = ",".join(anon_sources) if anon_sources else "none"
             anon_weight = int(anon_cfg.get("anonymous_count_weight", 1)) if anon_home else 0
@@ -1145,7 +1150,9 @@ class HeimaEngine:
         if method == "quorum":
             sources = list(person_cfg.get("sources", []))
             required = int(person_cfg.get("required", 1))
-            is_home, active_count = self._compute_group_presence(sources, required)
+            slug = str(person_cfg.get("slug", ""))
+            trace_key = f"person:{slug}" if slug else "person:unknown"
+            is_home, active_count = self._compute_group_presence(sources, required, trace_key=trace_key)
             confidence = int((active_count / max(1, len(sources))) * 100) if sources else 0
             return is_home, "quorum", confidence
 
@@ -1157,7 +1164,13 @@ class HeimaEngine:
             return False, "manual", 100
         return False, "manual", 0
 
-    def _compute_group_presence(self, sources: list[str], required: int) -> tuple[bool, int]:
+    def _compute_group_presence(
+        self,
+        sources: list[str],
+        required: int,
+        *,
+        trace_key: str | None = None,
+    ) -> tuple[bool, int]:
         observations = [self._normalizer.presence(entity_id) for entity_id in sources]
         active_count = sum(1 for obs in observations if obs.state == "on")
         fused = self._normalizer.derive(
@@ -1170,6 +1183,15 @@ class HeimaEngine:
             },
             context={"source": "group_presence"},
         )
+        if trace_key:
+            self._group_presence_trace[trace_key] = {
+                "source_observations": [obs.as_dict() for obs in observations],
+                "fused_observation": fused.as_dict(),
+                "plugin_id": fused.plugin_id,
+                "required": int(required),
+                "active_count": active_count,
+                "used_plugin_fallback": fused.reason == "plugin_error_fallback",
+            }
         return fused.state == "on", active_count
 
     def _compute_room_occupancy(self, room_cfg: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
@@ -1291,6 +1313,7 @@ class HeimaEngine:
             "source_observations": [obs.as_dict() for obs in observations],
             "fused_observation": fused.as_dict(),
             "plugin_id": fused.plugin_id,
+            "used_plugin_fallback": fused.reason == "plugin_error_fallback",
             "configured_source_weights": (
                 dict(room_cfg.get("source_weights", {})) if logic == "weighted_quorum" else {}
             ),
@@ -1374,6 +1397,9 @@ class HeimaEngine:
                 "hold_seen_state_by_room": dict(self._lighting_hold_seen_state),
             },
             "events": self._events.stats.as_dict(),
+            "presence": {
+                "group_trace": dict(self._group_presence_trace),
+            },
             "occupancy": {
                 "room_trace": dict(self._occupancy_room_trace),
             },
