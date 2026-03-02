@@ -34,6 +34,12 @@ class InputNormalizer:
         self._fusion = fusion_registry or NormalizationFusionRegistry()
         if not self._fusion.descriptors():
             register_builtin_fusion_plugins(self._fusion)
+        self._derive_calls = 0
+        self._derive_fallback_unknown = 0
+        self._derive_plugin_errors = 0
+        self._derive_plugin_error_counts: dict[str, int] = {}
+        self._last_plugin_error: dict[str, Any] | None = None
+        self._last_derive: dict[str, Any] | None = None
 
     @property
     def fusion_registry(self) -> NormalizationFusionRegistry:
@@ -229,13 +235,41 @@ class InputNormalizer:
     ) -> DerivedObservation:
         cfg = dict(strategy_cfg or {})
         plugin_id = str(cfg.pop("plugin_id", "builtin.direct"))
-        return self._fusion.derive(
-            plugin_id=plugin_id,
-            kind=kind,
-            inputs=list(inputs),
-            strategy_cfg=cfg,
-            context=dict(context or {}),
-        )
+        normalized_inputs = list(inputs)
+        self._derive_calls += 1
+        try:
+            result = self._fusion.derive(
+                plugin_id=plugin_id,
+                kind=kind,
+                inputs=normalized_inputs,
+                strategy_cfg=cfg,
+                context=dict(context or {}),
+            )
+        except Exception as err:
+            self._derive_plugin_errors += 1
+            self._derive_fallback_unknown += 1
+            self._derive_plugin_error_counts[plugin_id] = self._derive_plugin_error_counts.get(plugin_id, 0) + 1
+            self._last_plugin_error = {
+                "plugin_id": plugin_id,
+                "kind": kind,
+                "error_type": type(err).__name__,
+                "error": str(err),
+            }
+            result = self._fallback_derived_unknown(
+                kind=kind,
+                inputs=normalized_inputs,
+                plugin_id=plugin_id,
+                error=err,
+            )
+
+        self._last_derive = {
+            "plugin_id": plugin_id,
+            "kind": kind,
+            "result_state": result.state,
+            "result_reason": result.reason,
+            "used_fallback": result.reason == "plugin_error_fallback",
+        }
+        return result
 
     def _read_state(self, entity_id: str | None) -> str | None:
         if not entity_id:
@@ -243,3 +277,48 @@ class InputNormalizer:
         state = self._hass.states.get(entity_id)
         return state.state if state else None
 
+    def diagnostics(self) -> dict[str, Any]:
+        return {
+            "derive_calls": self._derive_calls,
+            "derive_fallback_unknown": self._derive_fallback_unknown,
+            "derive_plugin_errors": self._derive_plugin_errors,
+            "derive_plugin_error_counts": dict(self._derive_plugin_error_counts),
+            "last_plugin_error": dict(self._last_plugin_error) if self._last_plugin_error else None,
+            "last_derive": dict(self._last_derive) if self._last_derive else None,
+            "registered_plugins": [
+                {
+                    "plugin_id": descriptor.plugin_id,
+                    "plugin_api_version": descriptor.plugin_api_version,
+                    "supported_kinds": list(descriptor.supported_kinds),
+                }
+                for descriptor in self._fusion.descriptors()
+            ],
+        }
+
+    def _fallback_derived_unknown(
+        self,
+        *,
+        kind: str,
+        inputs: list[NormalizedObservation],
+        plugin_id: str,
+        error: Exception,
+    ) -> DerivedObservation:
+        return DerivedObservation(
+            kind=kind,
+            state="unknown",
+            confidence=0,
+            raw_state=None,
+            source_entity_id=None,
+            available=False,
+            stale=any(obs.stale for obs in inputs),
+            reason="plugin_error_fallback",
+            inputs=[obs.source_entity_id or f"{obs.kind}:{obs.state}" for obs in inputs],
+            fusion_strategy="fallback_unknown",
+            plugin_id=plugin_id,
+            plugin_api_version=1,
+            evidence={
+                "fallback": "unknown",
+                "error_type": type(error).__name__,
+                "error": str(error),
+            },
+        )

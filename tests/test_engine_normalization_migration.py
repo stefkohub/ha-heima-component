@@ -67,6 +67,9 @@ class _FakeNormalizer:
             reason="derived",
         )
 
+    def diagnostics(self):
+        return {"derive_calls": len(self.derive_calls)}
+
 
 def _engine() -> HeimaEngine:
     hass = SimpleNamespace(states=_FakeStates(), services=_FakeServices(), bus=_FakeBus())
@@ -115,3 +118,13 @@ def test_is_entity_home_uses_presence_normalizer():
 
     assert engine._is_entity_home("binary_sensor.room") is True
     assert engine._is_entity_home("binary_sensor.other") is False
+
+
+def test_engine_diagnostics_include_normalizer_diagnostics():
+    engine = _engine()
+    fake = _FakeNormalizer()
+    engine._normalizer = fake
+
+    diagnostics = engine.diagnostics()
+
+    assert diagnostics["normalization"] == {"derive_calls": 0}

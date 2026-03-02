@@ -1375,4 +1375,5 @@ class HeimaEngine:
             "security": {
                 "observation_trace": dict(self._security_observation_trace),
             },
+            "normalization": self._normalizer.diagnostics(),
         }

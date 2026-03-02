@@ -9,6 +9,15 @@ from custom_components.heima.runtime.normalization.builtins import register_buil
 from custom_components.heima.runtime.normalization.contracts import DerivedObservation, build_observation
 
 
+class _ExplodingFusionPlugin:
+    plugin_id = "test.exploding"
+    plugin_api_version = 1
+    supported_kinds = ("presence",)
+
+    def derive(self, *, kind, inputs, strategy_cfg=None, context=None):
+        raise RuntimeError("boom")
+
+
 class _FakeStateObj:
     def __init__(self, state: str):
         self.state = state
@@ -163,3 +172,63 @@ def test_derive_weighted_quorum_via_facade_uses_weights_and_threshold():
     assert result.plugin_id == "builtin.weighted_quorum"
     assert result.evidence["on_weight"] == 0.8
     assert result.evidence["threshold"] == 0.7
+
+
+def test_derive_missing_plugin_falls_back_to_unknown_and_records_diagnostics():
+    normalizer = InputNormalizer(_hass())
+    inputs = [
+        build_observation(
+            kind="presence",
+            state="on",
+            confidence=100,
+            raw_state="on",
+            source_entity_id="binary_sensor.a",
+            reason="test",
+        )
+    ]
+
+    result = normalizer.derive(
+        kind="presence",
+        inputs=inputs,
+        strategy_cfg={"plugin_id": "missing.plugin"},
+    )
+
+    assert result.state == "unknown"
+    assert result.reason == "plugin_error_fallback"
+    assert result.plugin_id == "missing.plugin"
+    diagnostics = normalizer.diagnostics()
+    assert diagnostics["derive_plugin_errors"] == 1
+    assert diagnostics["derive_fallback_unknown"] == 1
+    assert diagnostics["derive_plugin_error_counts"]["missing.plugin"] == 1
+    assert diagnostics["last_plugin_error"]["error_type"] == "KeyError"
+    assert diagnostics["last_derive"]["used_fallback"] is True
+
+
+def test_derive_plugin_exception_falls_back_to_unknown_and_records_plugin_error():
+    registry = NormalizationFusionRegistry()
+    registry.register(_ExplodingFusionPlugin())
+    normalizer = InputNormalizer(_hass(), fusion_registry=registry)
+    inputs = [
+        build_observation(
+            kind="presence",
+            state="on",
+            confidence=100,
+            raw_state="on",
+            source_entity_id="binary_sensor.a",
+            reason="test",
+        )
+    ]
+
+    result = normalizer.derive(
+        kind="presence",
+        inputs=inputs,
+        strategy_cfg={"plugin_id": "test.exploding"},
+    )
+
+    assert result.state == "unknown"
+    assert result.reason == "plugin_error_fallback"
+    assert result.evidence["error_type"] == "RuntimeError"
+    diagnostics = normalizer.diagnostics()
+    assert diagnostics["derive_plugin_errors"] == 1
+    assert diagnostics["derive_plugin_error_counts"]["test.exploding"] == 1
+    assert diagnostics["last_plugin_error"]["plugin_id"] == "test.exploding"
