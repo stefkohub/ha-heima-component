@@ -1216,6 +1216,7 @@ class HeimaEngine:
 
         observations = [self._normalizer.presence(entity_id) for entity_id in sources]
         strategy_cfg: dict[str, Any] = {"plugin_id": plugin_id}
+        strategy_cfg["fallback_state"] = "off"
         if logic == "weighted_quorum" and room_cfg.get("weight_threshold") not in (None, ""):
             strategy_cfg["threshold"] = float(room_cfg["weight_threshold"])
         if logic == "weighted_quorum" and isinstance(room_cfg.get("source_weights"), dict):

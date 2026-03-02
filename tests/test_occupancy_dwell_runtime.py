@@ -5,6 +5,16 @@ from types import SimpleNamespace
 import pytest
 
 from custom_components.heima.runtime.engine import HeimaEngine
+from custom_components.heima.runtime.normalization import InputNormalizer, NormalizationFusionRegistry
+
+
+class _ExplodingAnyOfPlugin:
+    plugin_id = "builtin.any_of"
+    plugin_api_version = 1
+    supported_kinds = ("presence",)
+
+    def derive(self, *, kind, inputs, strategy_cfg=None, context=None):
+        raise RuntimeError("boom")
 
 
 class _FakeStateObj:
@@ -249,3 +259,37 @@ async def test_room_weighted_quorum_uses_configured_source_weights_in_trace(monk
     }
     assert contributions["binary_sensor.room_presence_a"]["weight"] == 0.8
     assert contributions["binary_sensor.room_presence_a"]["contributes_to_on"] is True
+
+
+@pytest.mark.asyncio
+async def test_room_occupancy_fusion_failure_uses_fail_safe_off_fallback(monkeypatch):
+    t = 0.0
+    monkeypatch.setattr("custom_components.heima.runtime.engine.time.monotonic", lambda: t)
+    states = _MutableStates({"binary_sensor.room_presence": "on"})
+    engine = _engine(
+        states,
+        {
+            "rooms": [
+                {
+                    "room_id": "room",
+                    "occupancy_mode": "derived",
+                    "sources": ["binary_sensor.room_presence"],
+                    "logic": "any_of",
+                    "on_dwell_s": 0,
+                    "off_dwell_s": 0,
+                }
+            ]
+        },
+    )
+    registry = NormalizationFusionRegistry()
+    registry.register(_ExplodingAnyOfPlugin())
+    engine._normalizer = InputNormalizer(engine._hass, fusion_registry=registry)
+
+    snap = engine._compute_snapshot(reason="t0")
+
+    assert "room" not in snap.occupied_rooms
+    trace = engine.diagnostics()["occupancy"]["room_trace"]["room"]
+    assert trace["plugin_id"] == "builtin.any_of"
+    assert trace["fused_observation"]["state"] == "off"
+    assert trace["fused_observation"]["reason"] == "plugin_error_fallback"
+    assert trace["fused_observation"]["evidence"]["fallback"] == "off"
