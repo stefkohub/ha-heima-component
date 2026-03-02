@@ -87,7 +87,6 @@ async def test_room_on_dwell_delays_transition_from_off_to_on(monkeypatch):
     t = 12.0
     snap = engine._compute_snapshot(reason="t12")
     assert "room" in snap.occupied_rooms
-    assert engine.next_dwell_recheck_delay_s() is None
 
 
 @pytest.mark.asyncio

@@ -125,6 +125,8 @@ async def test_occupancy_mismatch_smart_requires_persistence(monkeypatch):
 
     await _eval(engine)
     assert "occupancy.inconsistency_home_no_room" not in _event_types(engine)
+    delay = engine.next_dwell_recheck_delay_s()
+    assert delay is not None and delay > 0
 
     current_t = 750.0
     await _eval(engine)

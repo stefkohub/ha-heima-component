@@ -120,6 +120,8 @@ async def test_security_mismatch_smart_requires_persistence_with_corroboration(m
 
     await _eval(engine)
     assert "security.armed_away_but_home" not in _event_types(engine)
+    delay = engine.next_dwell_recheck_delay_s()
+    assert delay is not None and delay > 0
 
     current_t = 450.0
     await _eval(engine)

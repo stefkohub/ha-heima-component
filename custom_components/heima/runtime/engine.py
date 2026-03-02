@@ -94,7 +94,7 @@ class HeimaEngine:
         self._occupancy_room_effective_state: dict[str, str] = {}
         self._occupancy_room_effective_since: dict[str, float] = {}
         self._occupancy_room_trace: dict[str, dict[str, Any]] = {}
-        self._next_dwell_recheck_at: float | None = None
+        self._next_timed_recheck_at: float | None = None
         self._security_observation_trace: dict[str, Any] = {}
         self._security_armed_away_but_home_since: float | None = None
         self._security_armed_away_but_home_emitted: bool = False
@@ -236,7 +236,7 @@ class HeimaEngine:
     def _compute_snapshot(self, reason: str) -> DecisionSnapshot:
         options = dict(self._entry.options)
         now = datetime.now(timezone.utc).isoformat()
-        self._next_dwell_recheck_at = None
+        self._next_timed_recheck_at = None
 
         named_people = options.get(OPT_PEOPLE_NAMED, [])
         home_people: list[str] = []
@@ -397,10 +397,14 @@ class HeimaEngine:
         )
 
     def next_dwell_recheck_delay_s(self) -> float | None:
-        """Return seconds until next dwell recheck should be evaluated."""
-        if self._next_dwell_recheck_at is None:
+        """Return seconds until next timed recheck should be evaluated."""
+        if self._next_timed_recheck_at is None:
             return None
-        return max(0.0, self._next_dwell_recheck_at - time.monotonic())
+        return max(0.0, self._next_timed_recheck_at - time.monotonic())
+
+    def _schedule_timed_recheck_deadline(self, deadline: float) -> None:
+        if self._next_timed_recheck_at is None or deadline < self._next_timed_recheck_at:
+            self._next_timed_recheck_at = deadline
 
     def _compute_lighting_intents(self, house_state: str, occupied_rooms: list[str]) -> dict[str, str]:
         options = dict(self._entry.options)
@@ -997,6 +1001,7 @@ class HeimaEngine:
             if persist_s <= 0 or (now - self._occupancy_home_no_room_since) >= persist_s:
                 self._occupancy_home_no_room_emitted = True
                 return True
+            self._schedule_timed_recheck_deadline(self._occupancy_home_no_room_since + persist_s)
             return False
 
         if key.startswith("room_no_home:"):
@@ -1012,6 +1017,7 @@ class HeimaEngine:
             if persist_s <= 0 or (now - self._occupancy_room_no_home_since[room_id]) >= persist_s:
                 self._occupancy_room_no_home_emitted.add(room_id)
                 return True
+            self._schedule_timed_recheck_deadline(self._occupancy_room_no_home_since[room_id] + persist_s)
             return False
 
         return False
@@ -1034,6 +1040,7 @@ class HeimaEngine:
         if persist_s <= 0 or (now - self._security_armed_away_but_home_since) >= persist_s:
             self._security_armed_away_but_home_emitted = True
             return True
+        self._schedule_timed_recheck_deadline(self._security_armed_away_but_home_since + persist_s)
         return False
 
     def _event_category(self, event_type: str) -> str:
@@ -1237,8 +1244,7 @@ class HeimaEngine:
                 self._occupancy_room_effective_since[room_id] = now
             elif dwell > 0:
                 deadline = candidate_since + dwell
-                if self._next_dwell_recheck_at is None or deadline < self._next_dwell_recheck_at:
-                    self._next_dwell_recheck_at = deadline
+                self._schedule_timed_recheck_deadline(deadline)
 
         forced_off_by_max_on = False
         effective_since = self._occupancy_room_effective_since.get(room_id, now)
