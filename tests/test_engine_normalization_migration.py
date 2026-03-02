@@ -71,6 +71,20 @@ class _FakeNormalizer:
         return {"derive_calls": len(self.derive_calls)}
 
 
+class _FailSafeCaptureNormalizer(_FakeNormalizer):
+    def derive(self, *, kind, inputs, strategy_cfg=None, context=None):
+        cfg = dict(strategy_cfg or {})
+        self.derive_calls.append((kind, str(cfg.get("plugin_id")), cfg))
+        return build_observation(
+            kind=kind,
+            state="off",
+            confidence=0,
+            raw_state=None,
+            source_entity_id=None,
+            reason="derived",
+        )
+
+
 def _engine() -> HeimaEngine:
     hass = SimpleNamespace(states=_FakeStates(), services=_FakeServices(), bus=_FakeBus())
     return HeimaEngine(hass=hass, entry=SimpleNamespace(options={}))
@@ -108,7 +122,17 @@ def test_compute_group_presence_uses_quorum_plugin():
 
     assert is_home is True
     assert active_count == 1
-    assert fake.derive_calls == [("presence", "builtin.quorum", {"plugin_id": "builtin.quorum", "required": 1})]
+    assert fake.derive_calls == [
+        (
+            "presence",
+            "builtin.quorum",
+            {
+                "plugin_id": "builtin.quorum",
+                "required": 1,
+                "fallback_state": "off",
+            },
+        )
+    ]
 
 
 def test_is_entity_home_uses_presence_normalizer():
@@ -128,3 +152,27 @@ def test_engine_diagnostics_include_normalizer_diagnostics():
     diagnostics = engine.diagnostics()
 
     assert diagnostics["normalization"] == {"derive_calls": 0}
+
+
+def test_compute_group_presence_requests_fail_safe_off_fallback():
+    engine = _engine()
+    fake = _FailSafeCaptureNormalizer()
+    engine._normalizer = fake
+
+    is_home, active_count = engine._compute_group_presence(
+        ["binary_sensor.room", "binary_sensor.other"], required=1
+    )
+
+    assert is_home is False
+    assert active_count == 1
+    assert fake.derive_calls == [
+        (
+            "presence",
+            "builtin.quorum",
+            {
+                "plugin_id": "builtin.quorum",
+                "required": 1,
+                "fallback_state": "off",
+            },
+        )
+    ]

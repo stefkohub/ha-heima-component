@@ -1163,7 +1163,11 @@ class HeimaEngine:
         fused = self._normalizer.derive(
             kind="presence",
             inputs=observations,
-            strategy_cfg={"plugin_id": "builtin.quorum", "required": int(required)},
+            strategy_cfg={
+                "plugin_id": "builtin.quorum",
+                "required": int(required),
+                "fallback_state": "off",
+            },
             context={"source": "group_presence"},
         )
         return fused.state == "on", active_count
