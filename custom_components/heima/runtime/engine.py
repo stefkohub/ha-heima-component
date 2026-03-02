@@ -1218,6 +1218,12 @@ class HeimaEngine:
         strategy_cfg: dict[str, Any] = {"plugin_id": plugin_id}
         if logic == "weighted_quorum" and room_cfg.get("weight_threshold") not in (None, ""):
             strategy_cfg["threshold"] = float(room_cfg["weight_threshold"])
+        if logic == "weighted_quorum" and isinstance(room_cfg.get("source_weights"), dict):
+            strategy_cfg["weights"] = {
+                str(entity_id): float(weight)
+                for entity_id, weight in room_cfg["source_weights"].items()
+                if str(entity_id)
+            }
         fused = self._normalizer.derive(
             kind="presence",
             inputs=observations,
@@ -1280,6 +1286,25 @@ class HeimaEngine:
             "source_observations": [obs.as_dict() for obs in observations],
             "fused_observation": fused.as_dict(),
             "plugin_id": fused.plugin_id,
+            "configured_source_weights": (
+                dict(room_cfg.get("source_weights", {})) if logic == "weighted_quorum" else {}
+            ),
+            "effective_source_weights": dict(fused.evidence.get("weights", {}))
+            if isinstance(fused.evidence, dict)
+            else {},
+            "source_weight_contributions": [
+                {
+                    "entity_id": obs.source_entity_id,
+                    "state": obs.state,
+                    "weight": (
+                        fused.evidence.get("weights", {}).get(obs.source_entity_id or "", 1.0)
+                        if isinstance(fused.evidence, dict)
+                        else 1.0
+                    ),
+                    "contributes_to_on": obs.state == "on",
+                }
+                for obs in observations
+            ],
             "candidate_state": candidate_state,
             "candidate_since": candidate_since,
             "effective_state": effective_state,

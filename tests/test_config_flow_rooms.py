@@ -54,3 +54,60 @@ def test_finalize_options_backfills_empty_legacy_room_as_occupancy_none():
     finalized = flow._finalize_options()
 
     assert finalized["rooms"][0]["occupancy_mode"] == "none"
+
+
+def test_room_normalization_parses_weighted_quorum_source_weights():
+    flow = _flow()
+
+    payload = flow._normalize_room_payload(
+        {
+            "room_id": "studio",
+            "occupancy_mode": "derived",
+            "sources": ["binary_sensor.a", "binary_sensor.b"],
+            "logic": "weighted_quorum",
+            "weight_threshold": "1.5",
+            "source_weights": "binary_sensor.a=1.2\nbinary_sensor.b=0.4",
+        }
+    )
+
+    assert payload["weight_threshold"] == 1.5
+    assert payload["source_weights"] == {
+        "binary_sensor.a": 1.2,
+        "binary_sensor.b": 0.4,
+    }
+    assert flow._validate_room_payload(payload, is_edit=False) == {}
+
+
+def test_room_normalization_drops_weighted_quorum_fields_for_other_logic():
+    flow = _flow()
+
+    payload = flow._normalize_room_payload(
+        {
+            "room_id": "studio",
+            "occupancy_mode": "derived",
+            "sources": ["binary_sensor.a", "binary_sensor.b"],
+            "logic": "any_of",
+            "weight_threshold": "1.5",
+            "source_weights": "binary_sensor.a=1.2",
+        }
+    )
+
+    assert "weight_threshold" not in payload
+    assert "source_weights" not in payload
+
+
+def test_room_validation_rejects_invalid_weighted_quorum_source_weights():
+    flow = _flow()
+
+    payload = {
+        "room_id": "studio",
+        "occupancy_mode": "derived",
+        "sources": ["binary_sensor.a", "binary_sensor.b"],
+        "logic": "weighted_quorum",
+        "weight_threshold": 1.0,
+        "source_weights": {"binary_sensor.other": 1.0},
+    }
+
+    errors = flow._validate_room_payload(payload, is_edit=False)
+
+    assert errors == {"source_weights": "invalid_mapping"}

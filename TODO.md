@@ -48,7 +48,7 @@
 - [x] N3 Security: normalize alarm raw states to canonical security observation; migrate `security.*` consistency logic to normalized inputs.
 - [x] N4 House Signals + People: normalize house-mode helpers and people source inputs; remove domain-level raw parsing call sites.
 - [ ] N5 Plugin Ecosystem Expansion: add advanced built-ins + external strategy providers behind the same `DerivedObservation` contract.
-- [x] N5 Plugin Ecosystem Expansion: first advanced built-in added (`builtin.weighted_quorum`) and runtime path prepared for occupancy usage.
+- [x] N5 Plugin Ecosystem Expansion: first advanced built-in added (`builtin.weighted_quorum`), wired into room occupancy, with configurable threshold and per-source weights trace.
 
 6. [ ] Phase 4 — Heating Domain (Safe Apply)
 - Implement base intents (`auto`, `eco`, `comfort`, `preheat`, `off`).

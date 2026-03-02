@@ -69,6 +69,20 @@ def _entity_selector(domains: list[str], multiple: bool = False) -> dict[str, An
     return selector({"entity": {"domain": domains, "multiple": multiple}})
 
 
+def _format_source_weights(weights: Any) -> str:
+    """Render persisted source weights for the room edit form."""
+    if not isinstance(weights, dict):
+        return ""
+    lines: list[str] = []
+    for entity_id, value in weights.items():
+        try:
+            rendered = float(value)
+        except (TypeError, ValueError):
+            continue
+        lines.append(f"{entity_id}={rendered:g}")
+    return "\n".join(lines)
+
+
 def _is_valid_slug(value: str) -> bool:
     try:
         cv.slug(value)
@@ -185,12 +199,60 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         if occupancy_mode not in ROOM_OCCUPANCY_MODES:
             occupancy_mode = "derived"
         data["occupancy_mode"] = occupancy_mode
-        data["logic"] = str(data.get("logic", "any_of"))
+        logic = str(data.get("logic", "any_of") or "any_of").strip()
+        if logic not in ROOM_LOGIC:
+            logic = "any_of"
+        data["logic"] = logic
+        if logic != "weighted_quorum":
+            data.pop("weight_threshold", None)
+            data.pop("source_weights", None)
+            return data
+
         if data.get("weight_threshold") in ("", None):
             data.pop("weight_threshold", None)
         elif "weight_threshold" in data:
             data["weight_threshold"] = float(data["weight_threshold"])
+
+        source_weights = self._normalize_source_weights(data.get("source_weights"))
+        if source_weights:
+            data["source_weights"] = source_weights
+        else:
+            data.pop("source_weights", None)
         return data
+
+    def _normalize_source_weights(self, value: Any) -> dict[str, float]:
+        """Normalize room source weights from form input into a stable mapping."""
+        if value in (None, ""):
+            return {}
+        if isinstance(value, dict):
+            result: dict[str, float] = {}
+            for entity_id, weight in value.items():
+                entity_key = str(entity_id).strip()
+                if not entity_key:
+                    continue
+                try:
+                    result[entity_key] = float(weight)
+                except (TypeError, ValueError):
+                    continue
+            return result
+
+        result: dict[str, float] = {}
+        text = str(value)
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if "=" not in line:
+                continue
+            entity_id, raw_weight = line.split("=", 1)
+            entity_key = entity_id.strip()
+            if not entity_key:
+                continue
+            try:
+                result[entity_key] = float(raw_weight.strip())
+            except (TypeError, ValueError):
+                continue
+        return result
 
     def _normalize_lighting_room_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         data = dict(payload)
@@ -623,7 +685,8 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         return await self.async_step_rooms_menu()
 
     def _room_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
-        defaults = defaults or {}
+        defaults = dict(defaults or {})
+        defaults["source_weights"] = _format_source_weights(defaults.get("source_weights"))
         schema = vol.Schema(
             {
                 vol.Required("room_id", default=defaults.get("room_id", "")): cv.string,
@@ -637,6 +700,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional("sources"): _entity_selector(["binary_sensor", "sensor"], multiple=True),
                 vol.Optional("logic", default=defaults.get("logic", "any_of")): vol.In(ROOM_LOGIC),
                 vol.Optional("weight_threshold"): vol.Coerce(float),
+                vol.Optional("source_weights"): cv.string,
                 vol.Optional("on_dwell_s", default=defaults.get("on_dwell_s", 5)): cv.positive_int,
                 vol.Optional("off_dwell_s", default=defaults.get("off_dwell_s", 120)): cv.positive_int,
                 vol.Optional("max_on_s", default=defaults.get("max_on_s")):
@@ -681,14 +745,35 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         sources = payload.get("sources", [])
         if occupancy_mode == "derived" and not sources:
             errors["sources"] = "required"
-        if payload.get("logic") == "weighted_quorum" and "weight_threshold" in payload:
-            try:
-                threshold = float(payload.get("weight_threshold"))
-            except (TypeError, ValueError):
-                errors["weight_threshold"] = "invalid_number"
-            else:
-                if threshold <= 0:
+        if payload.get("logic") == "weighted_quorum":
+            if "weight_threshold" in payload:
+                try:
+                    threshold = float(payload.get("weight_threshold"))
+                except (TypeError, ValueError):
                     errors["weight_threshold"] = "invalid_number"
+                else:
+                    if threshold <= 0:
+                        errors["weight_threshold"] = "invalid_number"
+
+            source_weights = payload.get("source_weights", {})
+            if not isinstance(source_weights, dict):
+                errors["source_weights"] = "invalid_format"
+            else:
+                invalid_source_weights = False
+                source_ids = {str(source) for source in sources}
+                for entity_id, weight in source_weights.items():
+                    if str(entity_id) not in source_ids:
+                        invalid_source_weights = True
+                        break
+                    try:
+                        if float(weight) <= 0:
+                            invalid_source_weights = True
+                            break
+                    except (TypeError, ValueError):
+                        invalid_source_weights = True
+                        break
+                if invalid_source_weights:
+                    errors["source_weights"] = "invalid_mapping"
         return errors
 
     # ---- Lighting: per-room scenes ----

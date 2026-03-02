@@ -198,3 +198,54 @@ async def test_room_weighted_quorum_uses_threshold_for_effective_occupancy(monke
     trace = engine.diagnostics()["occupancy"]["room_trace"]["room"]
     assert trace["plugin_id"] == "builtin.weighted_quorum"
     assert trace["fused_observation"]["fusion_strategy"] == "weighted_quorum"
+
+
+@pytest.mark.asyncio
+async def test_room_weighted_quorum_uses_configured_source_weights_in_trace(monkeypatch):
+    t = 0.0
+    monkeypatch.setattr("custom_components.heima.runtime.engine.time.monotonic", lambda: t)
+    states = _MutableStates(
+        {
+            "binary_sensor.room_presence_a": "on",
+            "binary_sensor.room_presence_b": "off",
+            "binary_sensor.room_presence_c": "off",
+        }
+    )
+    engine = _engine(
+        states,
+        {
+            "rooms": [
+                {
+                    "room_id": "room",
+                    "occupancy_mode": "derived",
+                    "sources": [
+                        "binary_sensor.room_presence_a",
+                        "binary_sensor.room_presence_b",
+                        "binary_sensor.room_presence_c",
+                    ],
+                    "logic": "weighted_quorum",
+                    "weight_threshold": 0.7,
+                    "source_weights": {
+                        "binary_sensor.room_presence_a": 0.8,
+                        "binary_sensor.room_presence_b": 0.1,
+                        "binary_sensor.room_presence_c": 0.1,
+                    },
+                    "on_dwell_s": 0,
+                    "off_dwell_s": 0,
+                }
+            ]
+        },
+    )
+
+    snap = engine._compute_snapshot(reason="t0")
+    assert "room" in snap.occupied_rooms
+
+    trace = engine.diagnostics()["occupancy"]["room_trace"]["room"]
+    assert trace["configured_source_weights"]["binary_sensor.room_presence_a"] == 0.8
+    assert trace["effective_source_weights"]["binary_sensor.room_presence_a"] == 0.8
+    contributions = {
+        item["entity_id"]: item
+        for item in trace["source_weight_contributions"]
+    }
+    assert contributions["binary_sensor.room_presence_a"]["weight"] == 0.8
+    assert contributions["binary_sensor.room_presence_a"]["contributes_to_on"] is True

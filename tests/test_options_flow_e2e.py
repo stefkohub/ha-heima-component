@@ -95,3 +95,35 @@ async def test_lighting_room_edit_flow_can_clear_scenes_and_persist_on_save():
     assert "scene_relax" not in room_map
     assert "scene_night" not in room_map
     assert "scene_off" not in room_map
+
+
+@pytest.mark.asyncio
+async def test_rooms_flow_persists_weighted_quorum_room_source_weights():
+    flow = _flow()
+
+    result = await flow.async_step_rooms_add(
+        {
+            "room_id": "studio",
+            "display_name": "Studio",
+            "area_id": "studio",
+            "occupancy_mode": "derived",
+            "sources": ["binary_sensor.motion", "binary_sensor.mmwave"],
+            "logic": "weighted_quorum",
+            "weight_threshold": 1.2,
+            "source_weights": "binary_sensor.motion=0.4\nbinary_sensor.mmwave=0.8",
+            "on_dwell_s": 5,
+            "off_dwell_s": 120,
+            "max_on_s": None,
+        }
+    )
+    assert result["type"] == "menu"
+
+    saved = await flow.async_step_rooms_save()
+    assert saved["type"] == "create_entry"
+    room = saved["data"]["rooms"][0]
+    assert room["logic"] == "weighted_quorum"
+    assert room["weight_threshold"] == 1.2
+    assert room["source_weights"] == {
+        "binary_sensor.motion": 0.4,
+        "binary_sensor.mmwave": 0.8,
+    }
