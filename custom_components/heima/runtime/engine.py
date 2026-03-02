@@ -1207,13 +1207,21 @@ class HeimaEngine:
             }
 
         logic = str(room_cfg.get("logic", "any_of"))
-        plugin_id = "builtin.all_of" if logic == "all_of" else "builtin.any_of"
+        if logic == "all_of":
+            plugin_id = "builtin.all_of"
+        elif logic == "weighted_quorum":
+            plugin_id = "builtin.weighted_quorum"
+        else:
+            plugin_id = "builtin.any_of"
 
         observations = [self._normalizer.presence(entity_id) for entity_id in sources]
+        strategy_cfg: dict[str, Any] = {"plugin_id": plugin_id}
+        if logic == "weighted_quorum" and room_cfg.get("weight_threshold") not in (None, ""):
+            strategy_cfg["threshold"] = float(room_cfg["weight_threshold"])
         fused = self._normalizer.derive(
             kind="presence",
             inputs=observations,
-            strategy_cfg={"plugin_id": plugin_id},
+            strategy_cfg=strategy_cfg,
             context={"room_id": room_id},
         )
 

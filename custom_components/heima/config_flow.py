@@ -45,7 +45,7 @@ from .const import (
 )
 
 PRESENCE_METHODS = ["ha_person", "quorum", "manual"]
-ROOM_LOGIC = ["any_of", "all_of"]
+ROOM_LOGIC = ["any_of", "all_of", "weighted_quorum"]
 ROOM_OCCUPANCY_MODES = ["derived", "none"]
 HEATING_APPLY_MODES = ["delegate_to_scheduler", "set_temperature"]
 LIGHTING_APPLY_MODES = ["scene", "delegate"]
@@ -186,6 +186,10 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
             occupancy_mode = "derived"
         data["occupancy_mode"] = occupancy_mode
         data["logic"] = str(data.get("logic", "any_of"))
+        if data.get("weight_threshold") in ("", None):
+            data.pop("weight_threshold", None)
+        elif "weight_threshold" in data:
+            data["weight_threshold"] = float(data["weight_threshold"])
         return data
 
     def _normalize_lighting_room_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -632,6 +636,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 ): vol.In(ROOM_OCCUPANCY_MODES),
                 vol.Optional("sources"): _entity_selector(["binary_sensor", "sensor"], multiple=True),
                 vol.Optional("logic", default=defaults.get("logic", "any_of")): vol.In(ROOM_LOGIC),
+                vol.Optional("weight_threshold"): vol.Coerce(float),
                 vol.Optional("on_dwell_s", default=defaults.get("on_dwell_s", 5)): cv.positive_int,
                 vol.Optional("off_dwell_s", default=defaults.get("off_dwell_s", 120)): cv.positive_int,
                 vol.Optional("max_on_s", default=defaults.get("max_on_s")):
@@ -676,6 +681,14 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         sources = payload.get("sources", [])
         if occupancy_mode == "derived" and not sources:
             errors["sources"] = "required"
+        if payload.get("logic") == "weighted_quorum" and "weight_threshold" in payload:
+            try:
+                threshold = float(payload.get("weight_threshold"))
+            except (TypeError, ValueError):
+                errors["weight_threshold"] = "invalid_number"
+            else:
+                if threshold <= 0:
+                    errors["weight_threshold"] = "invalid_number"
         return errors
 
     # ---- Lighting: per-room scenes ----
