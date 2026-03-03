@@ -88,6 +88,8 @@ Output:
   - lighting intent/apply v1 implementato
   - room senza sensori (`occupancy_mode = none`) supportate
   - zone occupancy calcolata ignorando room non sensorizzate
+  - input normalization layer plugin-first introdotto e usato nei path principali (occupancy, people quorum, house signals, security)
+  - occupancy plugin-first con dwell/max_on operativo e `weighted_quorum` disponibile
   - heating ancora stub (solo entita/config)
 
 ### 4. Orchestratore e Apply
@@ -119,6 +121,12 @@ Output:
 ### 7. Diagnostica e Privacy
 - Diagnostica include mapping, last applied, eventi recenti.
 - Redazione di dati sensibili.
+- Stato attuale:
+  - diagnostics globali del normalizer (`registered_plugins`, error counters, last fallback/error)
+  - trace locali nei punti runtime rilevanti:
+    - `presence.group_trace`
+    - `occupancy.room_trace`
+    - `security.observation_trace`
 
 ### 8. Localizzazione
 - Traduzioni base en/it per labels e errori.
@@ -140,8 +148,15 @@ Output:
 - Validazione rate limit e dedup eventi.
 - Stato attuale:
   - test unit + runtime + servizi + flow-style tests presenti
+  - aggiunto harness HA reale (`pytest-homeassistant-custom-component`)
+  - presenti test end-to-end con `ConfigEntry` e setup integrazione per:
+    - room occupancy dwell
+    - `weighted_quorum`
+    - people quorum
+    - anonymous presence
+    - fail-safe fallback path
   - coperti regression bug principali (selector clear, lighting conflicts, notify pipeline)
-  - suite locale: `28 passed`
+  - suite locale: `82 passed`
 
 ## Rischi e Mitigazioni
 - Config incoerente: validazioni strette + eventi system.config_invalid.
@@ -152,5 +167,5 @@ Output:
 1. Completare `Phase 3`: espandere Event Catalog e standardizzare payload/eventi per domini.
 2. Implementare `Phase 4` Heating safe engine (apply modes, guard, verify/retry, rate limit).
 3. Rafforzare lighting con policy conflitti zone-room configurabile (`first_wins/priority`).
-4. Introdurre test HA integration-level per Options Flow/ConfigEntry (oltre ai flow-style tests attuali).
+4. Valutare chiusura o ulteriore espansione di `N5` (provider esterni / plugin piu generici) dopo il merge del branch `normalisation`.
 5. Integrare Behavior Framework v1.1.
