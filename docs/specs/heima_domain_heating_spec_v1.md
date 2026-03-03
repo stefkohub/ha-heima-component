@@ -387,9 +387,15 @@ Heating v1 should expose at least:
 - `sensor.heima_heating_target_temp`
   - the currently computed target setpoint, when applicable (`fixed_target` or `vacation_curve`)
 
-- `select.heima_heating_intent`
-  - future-facing canonical intent selector (`auto`, `eco`, `comfort`, `preheat`, `off`)
-  - for v1, `auto` is sufficient as the normal default
+- `sensor.heima_heating_branch`
+  - the active built-in branch for the current `house_state`
+  - e.g. `disabled`, `scheduler_delegate`, `fixed_target`, `vacation_curve`
+
+- `sensor.heima_heating_current_setpoint`
+  - the thermostat setpoint currently read from the bound `climate_entity`
+
+- `sensor.heima_heating_last_applied_target`
+  - the last successfully applied target temperature by Heima
 
 These names are subject to the existing entity registry conventions in the main Heima spec.
 
@@ -438,6 +444,8 @@ Recommended initial events for Heating v1:
 - `heating.target_changed`
 - `heating.apply_skipped_small_delta`
 - `heating.manual_override_blocked`
+- `heating.apply_rate_limited`
+- `heating.vacation_bindings_unavailable`
 
 These should follow the existing Heima event pipeline and category gating rules.
 

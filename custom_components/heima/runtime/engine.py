@@ -268,8 +268,14 @@ class HeimaEngine:
             self._state.sensors["heima_heating_reason"] = "not_configured"
         if "heima_heating_phase" in self._state.sensors:
             self._state.sensors["heima_heating_phase"] = "normal"
+        if "heima_heating_branch" in self._state.sensors:
+            self._state.sensors["heima_heating_branch"] = "disabled"
         if "heima_heating_target_temp" in self._state.sensors:
             self._state.sensors["heima_heating_target_temp"] = None
+        if "heima_heating_current_setpoint" in self._state.sensors:
+            self._state.sensors["heima_heating_current_setpoint"] = None
+        if "heima_heating_last_applied_target" in self._state.sensors:
+            self._state.sensors["heima_heating_last_applied_target"] = None
 
     def _compute_snapshot(self, reason: str) -> DecisionSnapshot:
         options = dict(self._entry.options)
@@ -414,7 +420,6 @@ class HeimaEngine:
             occupied_rooms=occupied_rooms,
         )
 
-        heating_intent = self._state.get_select("heima_heating_intent") or "auto"
         self._compute_heating_runtime(house_state=house_state)
 
         self._state.set_binary("heima_anyone_home", anyone_home)
@@ -453,7 +458,6 @@ class HeimaEngine:
             people_count=people_count,
             occupied_rooms=occupied_rooms,
             lighting_intents=lighting_intents,
-            heating_intent=heating_intent,
             security_state=security_state,
             notes=f"reason={reason}",
         )
@@ -572,7 +576,10 @@ class HeimaEngine:
         self._state.set_sensor("heima_heating_state", state)
         self._state.set_sensor("heima_heating_reason", reason)
         self._state.set_sensor("heima_heating_phase", phase)
+        self._state.set_sensor("heima_heating_branch", branch_type)
         self._state.set_sensor("heima_heating_target_temp", target_temperature)
+        self._state.set_sensor("heima_heating_current_setpoint", current_setpoint)
+        self._state.set_sensor("heima_heating_last_applied_target", self._heating_last_target_temp)
         self._state.set_binary("heima_heating_applying_guard", applying_guard)
 
         self._heating_trace = {
@@ -676,6 +683,33 @@ class HeimaEngine:
                         "branch": selected_branch,
                         "target_temperature": target_temperature,
                     },
+                )
+            )
+
+        if reason == "apply_rate_limited" and previous_reason != "apply_rate_limited":
+            self._queue_event(
+                HeimaEvent(
+                    type="heating.apply_rate_limited",
+                    key="heating.apply_rate_limited",
+                    severity="info",
+                    title="Heating apply rate-limited",
+                    message="Heating apply skipped because the minimum apply interval is still active.",
+                    context={
+                        "branch": selected_branch,
+                        "target_temperature": target_temperature,
+                    },
+                )
+            )
+
+        if reason == "vacation_bindings_unavailable" and previous_reason != "vacation_bindings_unavailable":
+            self._queue_event(
+                HeimaEvent(
+                    type="heating.vacation_bindings_unavailable",
+                    key="heating.vacation_bindings_unavailable",
+                    severity="warn",
+                    title="Heating vacation bindings unavailable",
+                    message="Heating vacation branch could not compute a target because required bindings are unavailable.",
+                    context={"branch": selected_branch},
                 )
             )
 
@@ -1176,6 +1210,7 @@ class HeimaEngine:
                         else self._heating_last_target_temp
                     )
                     self._heating_last_apply_ts = time.monotonic()
+                    self._state.set_sensor("heima_heating_last_applied_target", self._heating_last_target_temp)
                     continue
                 except ServiceNotFound:
                     _LOGGER.warning(

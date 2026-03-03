@@ -48,7 +48,6 @@ SET_OVERRIDE_SCHEMA = vol.Schema(
 SUPPORTED_COMMANDS = {
     "recompute_now",
     "set_lighting_intent",
-    "set_heating_intent",
     "set_security_intent",
     "set_room_lighting_hold",
     "notify_event",
@@ -151,18 +150,6 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 select_key=f"heima_lighting_intent_{zone_id}",
                 option=option,
                 reason=f"service:set_lighting_intent:{zone_id}:{option}",
-            )
-            return
-
-        if command == "set_heating_intent":
-            option = str(params.get("intent") or target.get("intent") or "")
-            if not option:
-                raise ServiceValidationError("Missing heating intent value ('intent')")
-            await _set_select_and_evaluate(
-                coordinators,
-                select_key="heima_heating_intent",
-                option=option,
-                reason=f"service:set_heating_intent:{option}",
             )
             return
 

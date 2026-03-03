@@ -77,7 +77,6 @@ Payload (minimal, privacy-conscious):
 - `people_count` (int)
 - `occupied_rooms` (list of room_ids)
 - `lighting_intents` (dict zone_id -> intent)
-- `heating_intent` (string)
 - `security_state` (string)
 - `notes` (string optional)
 
@@ -122,7 +121,6 @@ Required fields:
 Supported commands (v1):
 - `recompute_now`
 - `set_lighting_intent`
-- `set_heating_intent`
 - `set_security_intent`
 - `set_room_lighting_hold`
 - `notify_event` (inject custom event through notification pipeline)
@@ -142,11 +140,6 @@ Command specifics:
 - effect:
   - writes to `select.heima_lighting_intent_<zone>` following core rules
   - triggers apply (subject to holds/behaviors)
-
-#### `set_heating_intent`
-- params:
-  - `intent` (`auto|eco|comfort|preheat|off`)
-  - `mode` (`temporary|sticky`) default `temporary`
 
 #### `set_security_intent`
 - params:

@@ -94,7 +94,9 @@ async def test_fixed_target_branch_builds_and_executes_heating_apply_step():
     assert engine.state.get_sensor("heima_heating_state") == "target_active"
     assert engine.state.get_sensor("heima_heating_reason") == "fixed_target_branch"
     assert engine.state.get_sensor("heima_heating_phase") == "fixed_target"
+    assert engine.state.get_sensor("heima_heating_branch") == "fixed_target"
     assert engine.state.get_sensor("heima_heating_target_temp") == 20.0
+    assert engine.state.get_sensor("heima_heating_current_setpoint") == 18.0
     assert any(step.action == "climate.set_temperature" for step in plan.steps)
 
     await engine._execute_apply_plan(plan)
@@ -109,6 +111,7 @@ async def test_fixed_target_branch_builds_and_executes_heating_apply_step():
         },
         False,
     )
+    assert engine.state.get_sensor("heima_heating_last_applied_target") == 20.0
 
 
 def test_fixed_target_branch_skips_small_delta_and_sets_guard():
@@ -173,6 +176,7 @@ def test_heating_without_active_override_branch_delegates_to_scheduler():
     assert engine.state.get_sensor("heima_heating_state") == "delegated"
     assert engine.state.get_sensor("heima_heating_reason") == "normal_scheduler_delegate"
     assert engine.state.get_sensor("heima_heating_phase") == "normal"
+    assert engine.state.get_sensor("heima_heating_branch") == "disabled"
     assert engine.state.get_sensor("heima_heating_target_temp") is None
     assert not any(step.domain == "heating" for step in plan.steps)
     assert trace["selected_branch"] == "disabled"
@@ -225,6 +229,7 @@ async def test_vacation_curve_branch_computes_target_and_executes_apply():
     assert engine.state.get_sensor("heima_heating_state") == "target_active"
     assert engine.state.get_sensor("heima_heating_reason") == "vacation_curve_branch"
     assert engine.state.get_sensor("heima_heating_phase") == "ramp_down"
+    assert engine.state.get_sensor("heima_heating_branch") == "vacation_curve"
     assert engine.state.get_sensor("heima_heating_target_temp") == 19.0
     assert any(step.action == "climate.set_temperature" for step in plan.steps)
 
@@ -362,3 +367,40 @@ def test_vacation_curve_without_required_bindings_is_inactive():
     assert engine.state.get_sensor("heima_heating_reason") == "vacation_bindings_unavailable"
     assert engine.state.get_binary("heima_heating_applying_guard") is True
     assert not any(step.domain == "heating" for step in plan.steps)
+
+
+@pytest.mark.asyncio
+async def test_heating_runtime_emits_vacation_bindings_unavailable_event_once_per_transition():
+    options = {
+        "heating": {
+            "climate_entity": "climate.test_thermostat",
+            "apply_mode": "set_temperature",
+            "temperature_step": 0.5,
+            "manual_override_guard": True,
+            "override_branches": {
+                "vacation": {
+                    "branch": "vacation_curve",
+                    "vacation_ramp_down_h": 8.0,
+                    "vacation_ramp_up_h": 10.0,
+                    "vacation_min_temp": 16.5,
+                    "vacation_comfort_temp": 19.5,
+                    "vacation_start_temp": 19.5,
+                    "vacation_min_total_hours_for_ramp": 24.0,
+                }
+            },
+        }
+    }
+    engine = _build_engine(
+        options,
+        {
+            "input_boolean.vacation_mode": "on",
+            "climate.test_thermostat": ("heat", {"temperature": 18.0}),
+        },
+    )
+
+    await engine.async_evaluate(reason="test")
+    await engine.async_evaluate(reason="test-repeat")
+
+    payloads = [payload for event_type, payload in engine._hass.bus.events if event_type == "heima_event"]
+    unavailable = [payload for payload in payloads if payload["type"] == "heating.vacation_bindings_unavailable"]
+    assert len(unavailable) == 1

@@ -504,7 +504,9 @@ async def test_e2e_heating_fixed_target_branch_updates_canonical_entities_and_ca
     assert hass.states.get("sensor.heima_heating_state").state == "target_active"
     assert hass.states.get("sensor.heima_heating_reason").state == "fixed_target_branch"
     assert hass.states.get("sensor.heima_heating_phase").state == "fixed_target"
+    assert hass.states.get("sensor.heima_heating_branch").state == "fixed_target"
     assert float(hass.states.get("sensor.heima_heating_target_temp").state) == 20.0
+    assert float(hass.states.get("sensor.heima_heating_current_setpoint").state) == 18.0
 
     assert calls == [
         {
@@ -518,6 +520,7 @@ async def test_e2e_heating_fixed_target_branch_updates_canonical_entities_and_ca
     trace = coordinator.engine.diagnostics()["heating"]
     assert trace["selected_branch"] == "fixed_target"
     assert trace["apply_allowed"] is True
+    assert float(hass.states.get("sensor.heima_heating_last_applied_target").state) == 20.0
 
 
 @pytest.mark.asyncio
@@ -576,6 +579,7 @@ async def test_e2e_heating_vacation_curve_branch_computes_and_applies_target(
     assert hass.states.get("sensor.heima_heating_state").state == "target_active"
     assert hass.states.get("sensor.heima_heating_reason").state == "vacation_curve_branch"
     assert hass.states.get("sensor.heima_heating_phase").state == "ramp_down"
+    assert hass.states.get("sensor.heima_heating_branch").state == "vacation_curve"
     assert float(hass.states.get("sensor.heima_heating_target_temp").state) == 19.0
 
     assert calls == [

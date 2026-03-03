@@ -18,7 +18,6 @@ class DecisionSnapshot:
     people_count: int
     occupied_rooms: list[str]
     lighting_intents: dict[str, str]
-    heating_intent: str
     security_state: str
     notes: str | None = None
 
@@ -33,7 +32,6 @@ class DecisionSnapshot:
             people_count=0,
             occupied_rooms=[],
             lighting_intents={},
-            heating_intent="auto",
             security_state="unknown",
             notes=None,
         )
