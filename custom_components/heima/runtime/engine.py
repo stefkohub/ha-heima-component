@@ -487,6 +487,7 @@ class HeimaEngine:
         manual_hold = bool(self._state.get_binary("heima_heating_manual_hold"))
         temperature_step = self._coerce_positive_float(heating_cfg.get("temperature_step"), default=0.5)
         current_setpoint = self._current_climate_setpoint(climate_entity)
+        outdoor_temperature = self._coerce_float_from_entity(heating_cfg.get("outdoor_temperature_entity"))
 
         state = "delegated"
         reason = "normal_branch"
@@ -496,6 +497,7 @@ class HeimaEngine:
         applying_guard = False
         skip_small_delta = False
         skip_rate_limited = False
+        vacation_meta: dict[str, Any] = {}
 
         if branch_type == "scheduler_delegate":
             reason = "scheduler_delegate_branch"
@@ -507,42 +509,60 @@ class HeimaEngine:
                 state = "inactive"
                 reason = "invalid_target_temperature"
                 applying_guard = True
-            elif apply_mode != "set_temperature":
-                state = "delegated"
-                reason = "apply_mode_delegate_to_scheduler"
-            elif manual_guard_enabled and manual_hold:
-                state = "blocked"
-                reason = "manual_override_blocked"
+            else:
+                (
+                    state,
+                    reason,
+                    apply_allowed,
+                    applying_guard,
+                    skip_small_delta,
+                    skip_rate_limited,
+                ) = self._finalize_heating_target(
+                    branch_reason="fixed_target_branch",
+                    target_temperature=target_temperature,
+                    apply_mode=apply_mode,
+                    manual_guard_enabled=manual_guard_enabled,
+                    manual_hold=manual_hold,
+                    current_setpoint=current_setpoint,
+                    temperature_step=temperature_step,
+                )
+        elif branch_type == "vacation_curve":
+            (
+                target_temperature,
+                phase,
+                vacation_meta,
+                vacation_error,
+            ) = self._resolve_vacation_curve_target(
+                heating_cfg=heating_cfg,
+                branch_cfg=branch_cfg,
+                outdoor_temperature=outdoor_temperature,
+                temperature_step=temperature_step,
+            )
+            if vacation_error:
+                state = "inactive"
+                reason = vacation_error
+                applying_guard = True
+            elif target_temperature is None:
+                state = "inactive"
+                reason = "vacation_curve_not_resolved"
                 applying_guard = True
             else:
-                diff = (
-                    None
-                    if current_setpoint is None
-                    else abs(float(target_temperature) - float(current_setpoint))
+                (
+                    state,
+                    reason,
+                    apply_allowed,
+                    applying_guard,
+                    skip_small_delta,
+                    skip_rate_limited,
+                ) = self._finalize_heating_target(
+                    branch_reason="vacation_curve_branch",
+                    target_temperature=target_temperature,
+                    apply_mode=apply_mode,
+                    manual_guard_enabled=manual_guard_enabled,
+                    manual_hold=manual_hold,
+                    current_setpoint=current_setpoint,
+                    temperature_step=temperature_step,
                 )
-                if diff is not None and diff < temperature_step:
-                    state = "idle"
-                    reason = "small_delta_skip"
-                    skip_small_delta = True
-                    applying_guard = True
-                elif self._heating_last_target_temp == target_temperature and self._heating_last_apply_ts is not None:
-                    if (time.monotonic() - self._heating_last_apply_ts) < _HEATING_MIN_SECONDS_BETWEEN_APPLIES:
-                        state = "idle"
-                        reason = "apply_rate_limited"
-                        skip_rate_limited = True
-                        applying_guard = True
-                    else:
-                        state = "target_active"
-                        reason = "fixed_target_branch"
-                        apply_allowed = True
-                else:
-                    state = "target_active"
-                    reason = "fixed_target_branch"
-                    apply_allowed = True
-        elif branch_type == "vacation_curve":
-            state = "inactive"
-            reason = "vacation_curve_not_implemented"
-            phase = "vacation_curve"
         else:
             branch_type = "disabled"
 
@@ -559,6 +579,7 @@ class HeimaEngine:
             "current_house_state": house_state,
             "selected_branch": branch_type,
             "current_setpoint": current_setpoint,
+            "outdoor_temperature": outdoor_temperature,
             "target_temperature": target_temperature,
             "temperature_step": temperature_step,
             "manual_override_guard_enabled": manual_guard_enabled,
@@ -573,7 +594,131 @@ class HeimaEngine:
             "rate_limit_window_s": _HEATING_MIN_SECONDS_BETWEEN_APPLIES,
             "last_applied_target": self._heating_last_target_temp,
             "last_apply_ts": self._heating_last_apply_ts,
+            "vacation": dict(vacation_meta),
         }
+
+    def _finalize_heating_target(
+        self,
+        *,
+        branch_reason: str,
+        target_temperature: float,
+        apply_mode: str,
+        manual_guard_enabled: bool,
+        manual_hold: bool,
+        current_setpoint: float | None,
+        temperature_step: float,
+    ) -> tuple[str, str, bool, bool, bool, bool]:
+        if apply_mode != "set_temperature":
+            return ("delegated", "apply_mode_delegate_to_scheduler", False, False, False, False)
+        if manual_guard_enabled and manual_hold:
+            return ("blocked", "manual_override_blocked", False, True, False, False)
+
+        diff = (
+            None
+            if current_setpoint is None
+            else abs(float(target_temperature) - float(current_setpoint))
+        )
+        if diff is not None and diff < temperature_step:
+            return ("idle", "small_delta_skip", False, True, True, False)
+
+        if self._heating_last_target_temp == target_temperature and self._heating_last_apply_ts is not None:
+            if (time.monotonic() - self._heating_last_apply_ts) < _HEATING_MIN_SECONDS_BETWEEN_APPLIES:
+                return ("idle", "apply_rate_limited", False, True, False, True)
+
+        return ("target_active", branch_reason, True, False, False, False)
+
+    def _resolve_vacation_curve_target(
+        self,
+        *,
+        heating_cfg: dict[str, Any],
+        branch_cfg: dict[str, Any],
+        outdoor_temperature: float | None,
+        temperature_step: float,
+    ) -> tuple[float | None, str, dict[str, Any], str | None]:
+        hours_from = self._coerce_float_from_entity(heating_cfg.get("vacation_hours_from_start_entity"))
+        hours_to = self._coerce_float_from_entity(heating_cfg.get("vacation_hours_to_end_entity"))
+        total_hours = self._coerce_float_from_entity(heating_cfg.get("vacation_total_hours_entity"))
+        explicit_is_long = self._coerce_bool_from_entity(heating_cfg.get("vacation_is_long_entity"))
+        ramp_down = self._coerce_non_negative_float(branch_cfg.get("vacation_ramp_down_h"), default=None)
+        ramp_up = self._coerce_non_negative_float(branch_cfg.get("vacation_ramp_up_h"), default=None)
+        min_total_hours_for_ramp = self._coerce_non_negative_float(
+            branch_cfg.get("vacation_min_total_hours_for_ramp"),
+            default=None,
+        )
+        min_temp = self._coerce_positive_float(branch_cfg.get("vacation_min_temp"), default=None)
+        comfort_temp = self._coerce_positive_float(branch_cfg.get("vacation_comfort_temp"), default=None)
+        start_temp = self._coerce_positive_float(branch_cfg.get("vacation_start_temp"), default=None)
+
+        if None in (
+            hours_from,
+            hours_to,
+            total_hours,
+            ramp_down,
+            ramp_up,
+            min_total_hours_for_ramp,
+            min_temp,
+            comfort_temp,
+            start_temp,
+            outdoor_temperature,
+        ):
+            return (None, "vacation_curve", {}, "vacation_bindings_unavailable")
+
+        is_long = (
+            explicit_is_long
+            if explicit_is_long is not None
+            else bool(total_hours >= min_total_hours_for_ramp)
+        )
+        min_safety = self._heating_vacation_min_safety(
+            min_temp=min_temp,
+            outdoor_temperature=outdoor_temperature,
+        )
+
+        if not is_long:
+            phase = "eco_only"
+            raw_target = min_safety
+        else:
+            eco = min_safety
+            raw_target = eco
+            phase = "cruise"
+            if total_hours <= 0:
+                phase = "cruise"
+            elif ramp_down > 0 and hours_from < ramp_down:
+                raw_target = start_temp + (eco - start_temp) * (hours_from / ramp_down)
+                phase = "ramp_down"
+            elif ramp_up > 0 and hours_to < ramp_up:
+                raw_target = eco + (comfort_temp - eco) * (1 - (hours_to / ramp_up))
+                phase = "ramp_up"
+
+        quantized = round(raw_target / temperature_step) * temperature_step
+        target = round(float(quantized), 2)
+        return (
+            target,
+            phase,
+            {
+                "hours_from_start": hours_from,
+                "hours_to_end": hours_to,
+                "total_hours": total_hours,
+                "is_long": is_long,
+                "ramp_down_h": ramp_down,
+                "ramp_up_h": ramp_up,
+                "min_total_hours_for_ramp": min_total_hours_for_ramp,
+                "min_temp": min_temp,
+                "comfort_temp": comfort_temp,
+                "start_temp": start_temp,
+                "raw_target": round(float(raw_target), 4),
+                "quantized_target": target,
+                "min_safety": min_safety,
+            },
+            None,
+        )
+
+    @staticmethod
+    def _heating_vacation_min_safety(*, min_temp: float, outdoor_temperature: float) -> float:
+        if outdoor_temperature <= 0:
+            return max(min_temp, 17.0)
+        if outdoor_temperature <= 3:
+            return max(min_temp, 16.5)
+        return min_temp
 
     def _current_climate_setpoint(self, entity_id: str) -> float | None:
         return self._coerce_positive_float(self._state_attr(entity_id, "temperature"), default=None)
@@ -589,6 +734,27 @@ class HeimaEngine:
             return None
         return attrs.get(attr_name)
 
+    def _coerce_float_from_entity(self, entity_id: str | None) -> float | None:
+        if not entity_id:
+            return None
+        state = self._hass.states.get(str(entity_id))
+        if state is None:
+            return None
+        try:
+            return float(state.state)
+        except (TypeError, ValueError):
+            return None
+
+    def _coerce_bool_from_entity(self, entity_id: str | None) -> bool | None:
+        if not entity_id:
+            return None
+        if self._hass.states.get(str(entity_id)) is None:
+            return None
+        obs = self._normalizer.boolean_signal(str(entity_id))
+        if obs.state == "unknown":
+            return None
+        return obs.state == "on"
+
     @staticmethod
     def _coerce_positive_float(value: Any, *, default: float | None) -> float | None:
         if value in (None, ""):
@@ -598,6 +764,18 @@ class HeimaEngine:
         except (TypeError, ValueError):
             return default
         if parsed <= 0:
+            return default
+        return parsed
+
+    @staticmethod
+    def _coerce_non_negative_float(value: Any, *, default: float | None) -> float | None:
+        if value in (None, ""):
+            return default
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        if parsed < 0:
             return default
         return parsed
 

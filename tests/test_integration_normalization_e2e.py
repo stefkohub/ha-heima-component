@@ -518,3 +518,76 @@ async def test_e2e_heating_fixed_target_branch_updates_canonical_entities_and_ca
     trace = coordinator.engine.diagnostics()["heating"]
     assert trace["selected_branch"] == "fixed_target"
     assert trace["apply_allowed"] is True
+
+
+@pytest.mark.asyncio
+async def test_e2e_heating_vacation_curve_branch_computes_and_applies_target(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    calls: list[dict[str, object]] = []
+
+    async def _capture_climate_call(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("climate", "set_temperature", _capture_climate_call)
+
+    entry = _entry(
+        {
+            "heating": {
+                "climate_entity": "climate.test_thermostat",
+                "apply_mode": "set_temperature",
+                "temperature_step": 0.5,
+                "manual_override_guard": True,
+                "outdoor_temperature_entity": "sensor.outdoor_temp",
+                "vacation_hours_from_start_entity": "sensor.vacation_from",
+                "vacation_hours_to_end_entity": "sensor.vacation_to",
+                "vacation_total_hours_entity": "sensor.vacation_total",
+                "vacation_is_long_entity": "binary_sensor.vacation_long",
+                "override_branches": {
+                    "vacation": {
+                        "branch": "vacation_curve",
+                        "vacation_ramp_down_h": 8.0,
+                        "vacation_ramp_up_h": 10.0,
+                        "vacation_min_temp": 16.5,
+                        "vacation_comfort_temp": 19.5,
+                        "vacation_start_temp": 19.5,
+                        "vacation_min_total_hours_for_ramp": 24.0,
+                    }
+                },
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("input_boolean.vacation_mode", "on")
+    hass.states.async_set("climate.test_thermostat", "heat", {"temperature": 18.0})
+    hass.states.async_set("sensor.outdoor_temp", "5.0")
+    hass.states.async_set("sensor.vacation_from", "2.0")
+    hass.states.async_set("sensor.vacation_to", "30.0")
+    hass.states.async_set("sensor.vacation_total", "32.0")
+    hass.states.async_set("binary_sensor.vacation_long", "on")
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.heima_house_state").state == "vacation"
+    assert hass.states.get("sensor.heima_heating_state").state == "target_active"
+    assert hass.states.get("sensor.heima_heating_reason").state == "vacation_curve_branch"
+    assert hass.states.get("sensor.heima_heating_phase").state == "ramp_down"
+    assert float(hass.states.get("sensor.heima_heating_target_temp").state) == 19.0
+
+    assert calls == [
+        {
+            "entity_id": "climate.test_thermostat",
+            "hvac_mode": "heat",
+            "temperature": 19.0,
+        }
+    ]
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    trace = coordinator.engine.diagnostics()["heating"]
+    assert trace["selected_branch"] == "vacation_curve"
+    assert trace["vacation"]["is_long"] is True
+    assert trace["vacation"]["quantized_target"] == 19.0
