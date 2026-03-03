@@ -96,6 +96,9 @@ class HeimaEngine:
         self._heating_last_reported_phase: str | None = None
         self._heating_last_reported_target: float | None = None
         self._heating_last_reported_branch: str | None = None
+        self._house_state_override: str | None = None
+        self._house_state_override_set_by: str | None = None
+        self._house_state_override_last_change_ts: str | None = None
         self._last_engine_enabled_state: bool | None = None
         self._events = HeimaEventPipeline(hass)
         self._normalizer = InputNormalizer(hass)
@@ -145,8 +148,37 @@ class HeimaEngine:
         _LOGGER.debug("Heima engine reload options")
         self._entry = entry
         self._options = HeimaOptions.from_entry(entry)
+        self._house_state_override = None
+        self._house_state_override_set_by = None
+        self._house_state_override_last_change_ts = None
         self._build_default_state()
         await self.async_evaluate(reason="options_reloaded")
+
+    def set_house_state_override(
+        self,
+        *,
+        mode: str,
+        enabled: bool,
+        source: str,
+    ) -> tuple[str, str | None, str | None]:
+        previous = self._house_state_override
+        current = previous
+        action = "noop"
+
+        if enabled:
+            if previous != mode:
+                current = mode
+                action = "set"
+        elif previous == mode:
+            current = None
+            action = "clear"
+
+        if action != "noop":
+            self._house_state_override = current
+            self._house_state_override_set_by = source
+            self._house_state_override_last_change_ts = datetime.now(timezone.utc).isoformat()
+
+        return action, previous, current
 
     async def async_evaluate(self, reason: str) -> DecisionSnapshot:
         """Evaluate canonical state from configured bindings."""
@@ -408,7 +440,7 @@ class HeimaEngine:
             ["binary_sensor.work_window"],
         )
 
-        house_state, house_reason = resolve_house_state(
+        derived_house_state, derived_house_reason = resolve_house_state(
             anyone_home=anyone_home,
             vacation_mode=vacation_mode,
             guest_mode=guest_mode,
@@ -416,6 +448,12 @@ class HeimaEngine:
             relax_mode=relax_mode,
             work_window=work_window,
         )
+        if self._house_state_override:
+            house_state = self._house_state_override
+            house_reason = f"manual_override:{self._house_state_override}"
+        else:
+            house_state = derived_house_state
+            house_reason = derived_house_reason
 
         lighting_intents = self._compute_lighting_intents(
             house_state=house_state,
@@ -2243,6 +2281,12 @@ class HeimaEngine:
             "security": {
                 "observation_trace": dict(self._security_observation_trace),
                 "corroboration_trace": dict(self._security_corroboration_trace),
+            },
+            "house_state_override": {
+                "house_state_override": self._house_state_override,
+                "house_state_override_active": self._house_state_override is not None,
+                "house_state_override_set_by": self._house_state_override_set_by,
+                "house_state_override_last_change_ts": self._house_state_override_last_change_ts,
             },
             "normalization": self._normalizer.diagnostics(),
         }

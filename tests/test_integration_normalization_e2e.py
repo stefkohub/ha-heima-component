@@ -6,9 +6,10 @@ import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.heima.const import DOMAIN
+from custom_components.heima.const import DOMAIN, SERVICE_SET_MODE
 from custom_components.heima.runtime.normalization import InputNormalizer, NormalizationFusionRegistry
 from custom_components.heima.runtime.engine import HeimaEngine
+from custom_components.heima.services import async_register_services
 
 
 def _entry(options: dict) -> MockConfigEntry:
@@ -463,6 +464,49 @@ async def test_e2e_house_signal_helpers_use_boolean_plugin_trace(
     assert trace["plugin_id"] == "builtin.any_of"
     assert trace["used_plugin_fallback"] is False
     assert trace["fused_observation"]["state"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_e2e_set_mode_forces_and_clears_final_house_state_override(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    entry = _entry({})
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    await async_register_services(hass)
+
+    assert hass.states.get("sensor.heima_house_state").state == "away"
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_MODE,
+        {"mode": "vacation", "state": True},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.heima_house_state").state == "vacation"
+    assert hass.states.get("sensor.heima_house_state_reason").state == "manual_override:vacation"
+    assert hass.states.get("sensor.heima_last_event").state == "system.house_state_override_changed"
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    override_diag = coordinator.engine.diagnostics()["house_state_override"]
+    assert override_diag["house_state_override"] == "vacation"
+    assert override_diag["house_state_override_active"] is True
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_MODE,
+        {"mode": "vacation", "state": False},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.heima_house_state").state == "away"
+    assert coordinator.engine.diagnostics()["house_state_override"]["house_state_override"] is None
 
 
 @pytest.mark.asyncio

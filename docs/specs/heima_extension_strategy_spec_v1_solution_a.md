@@ -171,17 +171,19 @@ Validation:
 ---
 
 ### 3.2 `heima.set_mode`
-Purpose: convenience wrapper for high-level modes.
+Purpose: set or clear a final house-state override.
 
 Service:
 - `heima.set_mode`
 
 Fields:
-- `mode` (enum: `engine_enabled`, `guest`, `vacation`, `relax`)
+- `mode` (enum: canonical house states)
 - `state` (bool)
 
 Effect:
-- toggles the corresponding Heima canonical entity / internal state
+- `state=true` sets the runtime-only final `house_state` override to `mode`
+- `state=false` clears the override only if the current override matches `mode`
+- emits `system.house_state_override_changed`
 - triggers recompute
 
 ---

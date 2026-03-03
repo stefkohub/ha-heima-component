@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from custom_components.heima.const import DOMAIN, SERVICE_COMMAND
+from custom_components.heima.const import DOMAIN, SERVICE_COMMAND, SERVICE_SET_MODE
 from custom_components.heima.runtime.engine import HeimaEngine
 from custom_components.heima.services import async_register_services
 
@@ -70,6 +70,31 @@ class _FakeCoordinator:
 
     async def async_request_evaluation(self, reason: str):
         return None
+
+    async def async_set_house_state_override(self, *, mode: str, enabled: bool):
+        action, previous, current = self.engine.set_house_state_override(
+            mode=mode,
+            enabled=enabled,
+            source="service:heima.set_mode",
+        )
+        await self.engine.async_emit_external_event(
+            event_type="system.house_state_override_changed",
+            key=(
+                "system.house_state_override_changed:"
+                f"{previous or 'none'}->{current or 'none'}:{action}"
+            ),
+            severity="info",
+            title="House-state override changed",
+            message=f"House-state override {action}: {previous or 'none'} -> {current or 'none'}.",
+            context={
+                "previous": previous,
+                "current": current,
+                "source": "service:heima.set_mode",
+                "action": action,
+            },
+        )
+        await self.engine.async_evaluate(reason=f"service:set_mode:{mode}:{enabled}")
+        return action
 
 
 @pytest.mark.asyncio
@@ -139,3 +164,47 @@ async def test_heima_command_notify_event_uses_pipeline_and_updates_sensors(monk
     assert "emitted=1" in stats_state
     attrs = engine.state.get_sensor_attributes("heima_event_stats") or {}
     assert attrs.get("last_event", {}).get("type") == "debug.manual_test"
+
+
+@pytest.mark.asyncio
+async def test_heima_set_mode_sets_and_clears_final_house_state_override(monkeypatch):
+    services = _FakeServicesRegistry()
+    hass = SimpleNamespace(
+        data={DOMAIN: {}},
+        services=services,
+        bus=_FakeBus(),
+        states=_FakeStates(),
+    )
+
+    entry = SimpleNamespace(options={})
+    engine = HeimaEngine(hass=hass, entry=entry)
+    engine._build_default_state()
+    coordinator = _FakeCoordinator(engine)
+
+    await async_register_services(hass)
+    monkeypatch.setattr(
+        "custom_components.heima.services._iter_coordinators",
+        lambda _hass: [coordinator],
+    )
+
+    handler = services.handler(DOMAIN, SERVICE_SET_MODE)
+    await handler(SimpleNamespace(data={"mode": "vacation", "state": True}))
+
+    assert engine.snapshot.house_state == "vacation"
+    assert engine.state.get_sensor("heima_house_state") == "vacation"
+    assert engine.state.get_sensor("heima_house_state_reason") == "manual_override:vacation"
+    assert engine.diagnostics()["house_state_override"]["house_state_override"] == "vacation"
+    assert hass.bus.events[-1][1]["type"] == "system.house_state_override_changed"
+    assert hass.bus.events[-1][1]["context"]["action"] == "set"
+
+    await handler(SimpleNamespace(data={"mode": "vacation", "state": False}))
+
+    assert engine.snapshot.house_state == "away"
+    assert engine.state.get_sensor("heima_house_state") == "away"
+    assert engine.diagnostics()["house_state_override"]["house_state_override"] is None
+    override_events = [
+        payload
+        for event_type, payload in hass.bus.events
+        if event_type == "heima_event" and payload["type"] == "system.house_state_override_changed"
+    ]
+    assert override_events[-1]["context"]["action"] == "clear"

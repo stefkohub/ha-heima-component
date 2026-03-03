@@ -13,6 +13,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import (
     DOMAIN,
+    HOUSE_STATES_CANONICAL,
     SERVICE_COMMAND,
     SERVICE_SET_MODE,
     SERVICE_SET_OVERRIDE,
@@ -201,7 +202,16 @@ async def async_register_services(hass: HomeAssistant) -> None:
             return
 
     async def _handle_set_mode(call: ServiceCall) -> None:
-        _LOGGER.info("Heima set_mode called: %s", call.data)
+        payload = dict(call.data)
+        mode = str(payload.get("mode", "")).strip()
+        if mode not in HOUSE_STATES_CANONICAL:
+            raise ServiceValidationError(f"Unsupported house-state override mode '{mode}'")
+        state = bool(payload.get("state"))
+        coordinators = list(_iter_coordinators(hass))
+        if not coordinators:
+            raise ServiceValidationError("No active Heima config entries found")
+        for coordinator in coordinators:
+            await coordinator.async_set_house_state_override(mode=mode, enabled=state)
 
     async def _handle_set_override(call: ServiceCall) -> None:
         payload = dict(call.data)
