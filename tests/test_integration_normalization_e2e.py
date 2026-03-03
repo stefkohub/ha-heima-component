@@ -195,6 +195,57 @@ async def test_e2e_person_quorum_updates_home_sensor_and_group_trace(
 
 
 @pytest.mark.asyncio
+async def test_e2e_person_weighted_quorum_uses_weights_and_group_trace(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    entry = _entry(
+        {
+            "people_named": [
+                {
+                    "slug": "stefano",
+                    "display_name": "Stefano",
+                    "presence_method": "quorum",
+                    "sources": [
+                        "binary_sensor.phone_wifi",
+                        "binary_sensor.watch_ble",
+                    ],
+                    "group_strategy": "weighted_quorum",
+                    "weight_threshold": 1.2,
+                    "source_weights": {
+                        "binary_sensor.phone_wifi": 0.4,
+                        "binary_sensor.watch_ble": 0.8,
+                    },
+                    "required": 1,
+                    "enable_override": False,
+                }
+            ]
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("binary_sensor.phone_wifi", "on")
+    hass.states.async_set("binary_sensor.watch_ble", "off")
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.heima_person_stefano_home").state == "off"
+
+    hass.states.async_set("binary_sensor.watch_ble", "on")
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.heima_person_stefano_home").state == "on"
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    trace = coordinator.engine.diagnostics()["presence"]["group_trace"]["person:stefano"]
+    assert trace["plugin_id"] == "builtin.weighted_quorum"
+    assert trace["group_strategy"] == "weighted_quorum"
+    assert trace["weight_threshold"] == 1.2
+    assert trace["configured_source_weights"]["binary_sensor.watch_ble"] == 0.8
+
+
+@pytest.mark.asyncio
 async def test_e2e_anonymous_presence_updates_sensor_and_group_trace(
     hass: HomeAssistant,
     enable_custom_integrations,
@@ -242,6 +293,53 @@ async def test_e2e_anonymous_presence_updates_sensor_and_group_trace(
     assert trace["active_count"] == 1
     assert trace["used_plugin_fallback"] is False
     assert trace["fused_observation"]["state"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_e2e_anonymous_weighted_quorum_uses_weights_and_group_trace(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    entry = _entry(
+        {
+            "people_anonymous": {
+                "enabled": True,
+                "sources": [
+                    "binary_sensor.motion_hall",
+                    "binary_sensor.motion_living",
+                ],
+                "group_strategy": "weighted_quorum",
+                "weight_threshold": 1.2,
+                "source_weights": {
+                    "binary_sensor.motion_hall": 0.4,
+                    "binary_sensor.motion_living": 0.8,
+                },
+                "required": 1,
+                "anonymous_count_weight": 2,
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("binary_sensor.motion_hall", "on")
+    hass.states.async_set("binary_sensor.motion_living", "off")
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.heima_anonymous_presence").state == "off"
+
+    hass.states.async_set("binary_sensor.motion_living", "on")
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.heima_anonymous_presence").state == "on"
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    trace = coordinator.engine.diagnostics()["presence"]["group_trace"]["anonymous"]
+    assert trace["plugin_id"] == "builtin.weighted_quorum"
+    assert trace["group_strategy"] == "weighted_quorum"
+    assert trace["weight_threshold"] == 1.2
+    assert trace["configured_source_weights"]["binary_sensor.motion_living"] == 0.8
 
 
 @pytest.mark.asyncio

@@ -45,6 +45,7 @@ from .const import (
 )
 
 PRESENCE_METHODS = ["ha_person", "quorum", "manual"]
+PEOPLE_GROUP_LOGIC = ["quorum", "weighted_quorum"]
 ROOM_LOGIC = ["any_of", "all_of", "weighted_quorum"]
 ROOM_OCCUPANCY_MODES = ["derived", "none"]
 HEATING_APPLY_MODES = ["delegate_to_scheduler", "set_temperature"]
@@ -186,7 +187,35 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         if data.get("person_entity"):
             data["person_entity"] = str(data["person_entity"])
         data["sources"] = self._normalize_multi_value(data.get("sources"))
+        self._normalize_group_fusion_fields(data)
         return data
+
+    def _normalize_people_anonymous_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        data = dict(payload)
+        data["sources"] = self._normalize_multi_value(data.get("sources"))
+        self._normalize_group_fusion_fields(data)
+        return data
+
+    def _normalize_group_fusion_fields(self, data: dict[str, Any]) -> None:
+        group_strategy = str(data.get("group_strategy", "quorum") or "quorum").strip()
+        if group_strategy not in PEOPLE_GROUP_LOGIC:
+            group_strategy = "quorum"
+        data["group_strategy"] = group_strategy
+        if group_strategy != "weighted_quorum":
+            data.pop("weight_threshold", None)
+            data.pop("source_weights", None)
+            return
+
+        if data.get("weight_threshold") in ("", None):
+            data.pop("weight_threshold", None)
+        elif "weight_threshold" in data:
+            data["weight_threshold"] = float(data["weight_threshold"])
+
+        source_weights = self._normalize_source_weights(data.get("source_weights"))
+        if source_weights:
+            data["source_weights"] = source_weights
+        else:
+            data.pop("source_weights", None)
 
     def _normalize_room_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         data = dict(payload)
@@ -459,15 +488,16 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 data_schema=self._people_anonymous_schema(current),
             )
 
-        user_input = dict(user_input)
-        user_input["sources"] = self._normalize_multi_value(user_input.get("sources"))
+        user_input = self._normalize_people_anonymous_payload(user_input)
 
         sources = user_input.get("sources", [])
         required = int(user_input.get("required", 1))
         if user_input.get("enabled") and not sources:
             errors["sources"] = "required"
-        elif sources and required > len(sources):
+        elif user_input.get("group_strategy", "quorum") == "quorum" and sources and required > len(sources):
             errors["required"] = "invalid_required"
+        elif user_input.get("group_strategy") == "weighted_quorum":
+            errors.update(self._validate_group_weighted_quorum(user_input))
 
         if errors:
             return self.async_show_form(
@@ -487,7 +517,8 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_create_entry(title="", data=self._finalize_options())
 
     def _people_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
-        defaults = defaults or {}
+        defaults = dict(defaults or {})
+        defaults["source_weights"] = _format_source_weights(defaults.get("source_weights"))
         schema = vol.Schema(
             {
                 vol.Required("slug", default=defaults.get("slug", "")): cv.string,
@@ -500,7 +531,12 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional("sources"): _entity_selector(
                     ["binary_sensor", "sensor", "device_tracker"], multiple=True
                 ),
+                vol.Optional(
+                    "group_strategy", default=defaults.get("group_strategy", "quorum")
+                ): vol.In(PEOPLE_GROUP_LOGIC),
                 vol.Optional("required", default=defaults.get("required", 1)): cv.positive_int,
+                vol.Optional("weight_threshold"): vol.Coerce(float),
+                vol.Optional("source_weights"): cv.string,
                 vol.Optional("arrive_hold_s", default=defaults.get("arrive_hold_s", 10)):
                 cv.positive_int,
                 vol.Optional("leave_hold_s", default=defaults.get("leave_hold_s", 120)):
@@ -511,14 +547,20 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         return self._with_suggested(schema, defaults)
 
     def _people_anonymous_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
-        defaults = defaults or {}
+        defaults = dict(defaults or {})
+        defaults["source_weights"] = _format_source_weights(defaults.get("source_weights"))
         schema = vol.Schema(
             {
                 vol.Optional("enabled", default=defaults.get("enabled", False)): bool,
                 vol.Optional("sources"): _entity_selector(
                     ["binary_sensor", "sensor", "device_tracker"], multiple=True
                 ),
+                vol.Optional(
+                    "group_strategy", default=defaults.get("group_strategy", "quorum")
+                ): vol.In(PEOPLE_GROUP_LOGIC),
                 vol.Optional("required", default=defaults.get("required", 1)): cv.positive_int,
+                vol.Optional("weight_threshold"): vol.Coerce(float),
+                vol.Optional("source_weights"): cv.string,
                 vol.Optional(
                     "anonymous_count_weight", default=defaults.get("anonymous_count_weight", 1)
                 ): cv.positive_int,
@@ -557,8 +599,39 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
             required = int(payload.get("required", 1))
             if not sources:
                 errors["sources"] = "required"
-            elif required > len(sources):
+            elif payload.get("group_strategy", "quorum") == "quorum" and required > len(sources):
                 errors["required"] = "invalid_required"
+            if payload.get("group_strategy") == "weighted_quorum":
+                errors.update(self._validate_group_weighted_quorum(payload))
+        return errors
+
+    def _validate_group_weighted_quorum(self, payload: dict[str, Any]) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        if "weight_threshold" in payload:
+            try:
+                threshold = float(payload.get("weight_threshold"))
+            except (TypeError, ValueError):
+                errors["weight_threshold"] = "invalid_number"
+            else:
+                if threshold <= 0:
+                    errors["weight_threshold"] = "invalid_number"
+
+        sources = {str(source) for source in payload.get("sources", [])}
+        source_weights = payload.get("source_weights", {})
+        if not isinstance(source_weights, dict):
+            errors["source_weights"] = "invalid_format"
+            return errors
+        for entity_id, weight in source_weights.items():
+            if str(entity_id) not in sources:
+                errors["source_weights"] = "invalid_mapping"
+                return errors
+            try:
+                if float(weight) <= 0:
+                    errors["source_weights"] = "invalid_mapping"
+                    return errors
+            except (TypeError, ValueError):
+                errors["source_weights"] = "invalid_mapping"
+                return errors
         return errors
 
     # ---- Rooms (occupancy) ----
@@ -1212,9 +1285,9 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 options.get(OPT_NOTIFICATIONS, {})
             )
         if OPT_PEOPLE_ANON in options:
-            anon = dict(options.get(OPT_PEOPLE_ANON, {}))
-            anon["sources"] = self._normalize_multi_value(anon.get("sources"))
-            options[OPT_PEOPLE_ANON] = anon
+            options[OPT_PEOPLE_ANON] = self._normalize_people_anonymous_payload(
+                options.get(OPT_PEOPLE_ANON, {})
+            )
 
         # Keep the in-memory working copy coherent for subsequent menu steps in the same flow.
         self.options = options

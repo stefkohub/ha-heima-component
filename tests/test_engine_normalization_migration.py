@@ -122,11 +122,11 @@ def test_compute_group_presence_uses_quorum_plugin():
     fake = _FakeNormalizer()
     engine._normalizer = fake
 
-    is_home, active_count = engine._compute_group_presence(
+    fused, active_count = engine._compute_group_presence(
         ["binary_sensor.room", "binary_sensor.other"], required=1
     )
 
-    assert is_home is True
+    assert fused.state == "on"
     assert active_count == 1
     assert fake.derive_calls == [
         (
@@ -165,11 +165,11 @@ def test_compute_group_presence_requests_fail_safe_off_fallback():
     fake = _FailSafeCaptureNormalizer()
     engine._normalizer = fake
 
-    is_home, active_count = engine._compute_group_presence(
+    fused, active_count = engine._compute_group_presence(
         ["binary_sensor.room", "binary_sensor.other"], required=1
     )
 
-    assert is_home is False
+    assert fused.state == "off"
     assert active_count == 1
     assert fake.derive_calls == [
         (
@@ -192,18 +192,54 @@ def test_compute_group_presence_records_local_trace():
         }
     )
 
-    is_home, active_count = engine._compute_group_presence(
+    fused, active_count = engine._compute_group_presence(
         ["binary_sensor.room", "binary_sensor.other"],
         required=1,
         trace_key="person:stefano",
     )
 
-    assert is_home is True
+    assert fused.state == "on"
     assert active_count == 1
     diagnostics = engine.diagnostics()
     trace = diagnostics["presence"]["group_trace"]["person:stefano"]
     assert trace["plugin_id"] == "builtin.quorum"
+    assert trace["group_strategy"] == "quorum"
     assert trace["required"] == 1
     assert trace["active_count"] == 1
     assert trace["used_plugin_fallback"] is False
     assert trace["fused_observation"]["state"] == "on"
+
+
+def test_compute_group_presence_supports_weighted_quorum_strategy():
+    engine = _engine()
+    fake = _FakeNormalizer()
+    engine._normalizer = fake
+
+    fused, active_count = engine._compute_group_presence(
+        ["binary_sensor.room", "binary_sensor.other"],
+        required=1,
+        strategy="weighted_quorum",
+        weight_threshold=1.2,
+        source_weights={
+            "binary_sensor.room": 0.8,
+            "binary_sensor.other": 0.4,
+        },
+    )
+
+    assert fused.state == "on"
+    assert active_count == 1
+    assert fake.derive_calls == [
+        (
+            "presence",
+            "builtin.weighted_quorum",
+            {
+                "plugin_id": "builtin.weighted_quorum",
+                "fallback_state": "off",
+                "threshold": 1.2,
+                "weights": {
+                    "binary_sensor.room": 0.8,
+                    "binary_sensor.other": 0.4,
+                },
+            },
+        )
+    ]

@@ -132,3 +132,42 @@ def test_notifications_payload_normalizes_security_mismatch_policy():
     )
     assert normalized["security_mismatch_policy"] == "smart"
     assert normalized["security_mismatch_persist_s"] == 42
+
+
+def test_people_payload_parses_weighted_quorum_group_fields():
+    flow = _flow()
+    normalized = flow._normalize_people_payload(
+        {
+            "slug": "stefano",
+            "presence_method": "quorum",
+            "sources": ["binary_sensor.a", "binary_sensor.b"],
+            "group_strategy": "weighted_quorum",
+            "weight_threshold": "1.2",
+            "source_weights": "binary_sensor.a=0.8\nbinary_sensor.b=0.4",
+        }
+    )
+
+    assert normalized["group_strategy"] == "weighted_quorum"
+    assert normalized["weight_threshold"] == 1.2
+    assert normalized["source_weights"] == {
+        "binary_sensor.a": 0.8,
+        "binary_sensor.b": 0.4,
+    }
+
+
+def test_people_payload_drops_weighted_fields_for_plain_quorum():
+    flow = _flow()
+    normalized = flow._normalize_people_payload(
+        {
+            "slug": "stefano",
+            "presence_method": "quorum",
+            "sources": ["binary_sensor.a"],
+            "group_strategy": "quorum",
+            "weight_threshold": "1.2",
+            "source_weights": "binary_sensor.a=0.8",
+        }
+    )
+
+    assert normalized["group_strategy"] == "quorum"
+    assert "weight_threshold" not in normalized
+    assert "source_weights" not in normalized

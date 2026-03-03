@@ -270,12 +270,16 @@ class HeimaEngine:
         if anon_cfg.get("enabled"):
             anon_sources = list(anon_cfg.get("sources", []))
             required = int(anon_cfg.get("required", 1))
-            anon_home, active_count = self._compute_group_presence(
+            anon_fused, active_count = self._compute_group_presence(
                 anon_sources,
                 required,
+                strategy=str(anon_cfg.get("group_strategy", "quorum") or "quorum"),
+                weight_threshold=anon_cfg.get("weight_threshold"),
+                source_weights=anon_cfg.get("source_weights"),
                 trace_key="anonymous",
             )
-            anon_confidence = 100 if anon_home else 0
+            anon_home = anon_fused.state == "on"
+            anon_confidence = int(anon_fused.confidence)
             anon_source = ",".join(anon_sources) if anon_sources else "none"
             anon_weight = int(anon_cfg.get("anonymous_count_weight", 1)) if anon_home else 0
             prev_anon_home = self._state.get_binary("heima_anonymous_presence")
@@ -1152,8 +1156,16 @@ class HeimaEngine:
             required = int(person_cfg.get("required", 1))
             slug = str(person_cfg.get("slug", ""))
             trace_key = f"person:{slug}" if slug else "person:unknown"
-            is_home, active_count = self._compute_group_presence(sources, required, trace_key=trace_key)
-            confidence = int((active_count / max(1, len(sources))) * 100) if sources else 0
+            fused, active_count = self._compute_group_presence(
+                sources,
+                required,
+                strategy=str(person_cfg.get("group_strategy", "quorum") or "quorum"),
+                weight_threshold=person_cfg.get("weight_threshold"),
+                source_weights=person_cfg.get("source_weights"),
+                trace_key=trace_key,
+            )
+            is_home = fused.state == "on"
+            confidence = int(fused.confidence)
             return is_home, "quorum", confidence
 
         slug = str(person_cfg.get("slug", ""))
@@ -1169,18 +1181,33 @@ class HeimaEngine:
         sources: list[str],
         required: int,
         *,
+        strategy: str = "quorum",
+        weight_threshold: Any = None,
+        source_weights: Any = None,
         trace_key: str | None = None,
-    ) -> tuple[bool, int]:
+    ) -> tuple[DerivedObservation, int]:
         observations = [self._normalizer.presence(entity_id) for entity_id in sources]
         active_count = sum(1 for obs in observations if obs.state == "on")
+        group_strategy = str(strategy or "quorum")
+        plugin_id = "builtin.weighted_quorum" if group_strategy == "weighted_quorum" else "builtin.quorum"
+        strategy_cfg: dict[str, Any] = {
+            "plugin_id": plugin_id,
+            "fallback_state": "off",
+        }
+        if plugin_id == "builtin.quorum":
+            strategy_cfg["required"] = int(required)
+        elif weight_threshold not in (None, ""):
+            strategy_cfg["threshold"] = float(weight_threshold)
+        if plugin_id == "builtin.weighted_quorum" and isinstance(source_weights, dict):
+            strategy_cfg["weights"] = {
+                str(entity_id): float(weight)
+                for entity_id, weight in source_weights.items()
+                if str(entity_id)
+            }
         fused = self._normalizer.derive(
             kind="presence",
             inputs=observations,
-            strategy_cfg={
-                "plugin_id": "builtin.quorum",
-                "required": int(required),
-                "fallback_state": "off",
-            },
+            strategy_cfg=strategy_cfg,
             context={"source": "group_presence"},
         )
         if trace_key:
@@ -1188,11 +1215,20 @@ class HeimaEngine:
                 "source_observations": [obs.as_dict() for obs in observations],
                 "fused_observation": fused.as_dict(),
                 "plugin_id": fused.plugin_id,
+                "group_strategy": group_strategy,
                 "required": int(required),
+                "weight_threshold": (
+                    float(weight_threshold)
+                    if group_strategy == "weighted_quorum" and weight_threshold not in (None, "")
+                    else None
+                ),
+                "configured_source_weights": (
+                    dict(source_weights) if group_strategy == "weighted_quorum" and isinstance(source_weights, dict) else {}
+                ),
                 "active_count": active_count,
                 "used_plugin_fallback": fused.reason == "plugin_error_fallback",
             }
-        return fused.state == "on", active_count
+        return fused, active_count
 
     def _compute_room_occupancy(self, room_cfg: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         room_id = str(room_cfg.get("room_id", ""))
