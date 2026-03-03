@@ -22,6 +22,9 @@ This folder contains the canonical, versioned specifications for the Heima Home 
 - **Input Normalization Layer SPEC v1** — Shared facade/contracts for normalized observations and gradual migration from raw HA states  
   File: `heima_input_normalization_layer_spec_v1.md`
 
+- **Runtime Scheduler Mini-SPEC v1** — Shared internal timing subsystem for delayed and deadline-based runtime rechecks  
+  File: `heima_runtime_scheduler_spec_v1.md`
+
 - **Event Catalog SPEC v1** — Standard events, keys, severity, payloads, dedup/rate-limit rules  
   File: `heima_event_catalog_spec_v1.md`
 
@@ -81,6 +84,7 @@ docs/
     heima_options_flow_spec_v1.md
     heima_event_catalog_spec_v1.md
     heima_input_normalization_layer_spec_v1.md
+    heima_runtime_scheduler_spec_v1.md
     heima_mapping_model_spec_v1.md
     heima_domain_heating_spec_v1.md
     heima_policy_plugin_framework_spec_v1.md
