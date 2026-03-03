@@ -36,6 +36,7 @@ from ..entities.registry import build_registry
 from ..models import HeimaOptions
 from .contracts import ApplyPlan, ApplyStep, HeimaEvent
 from .lighting import pick_scene_for_intent_with_trace, resolve_zone_intent
+from .normalization.config import build_group_presence_strategy_cfg
 from .normalization.service import InputNormalizer
 from .notifications import HeimaEventPipeline
 from .policy import resolve_house_state
@@ -1189,21 +1190,13 @@ class HeimaEngine:
         observations = [self._normalizer.presence(entity_id) for entity_id in sources]
         active_count = sum(1 for obs in observations if obs.state == "on")
         group_strategy = str(strategy or "quorum")
-        plugin_id = "builtin.weighted_quorum" if group_strategy == "weighted_quorum" else "builtin.quorum"
-        strategy_cfg: dict[str, Any] = {
-            "plugin_id": plugin_id,
-            "fallback_state": "off",
-        }
-        if plugin_id == "builtin.quorum":
-            strategy_cfg["required"] = int(required)
-        elif weight_threshold not in (None, ""):
-            strategy_cfg["threshold"] = float(weight_threshold)
-        if plugin_id == "builtin.weighted_quorum" and isinstance(source_weights, dict):
-            strategy_cfg["weights"] = {
-                str(entity_id): float(weight)
-                for entity_id, weight in source_weights.items()
-                if str(entity_id)
-            }
+        strategy_cfg = build_group_presence_strategy_cfg(
+            strategy=group_strategy,
+            required=int(required),
+            weight_threshold=weight_threshold,
+            source_weights=source_weights,
+            fallback_state="off",
+        )
         fused = self._normalizer.derive(
             kind="presence",
             inputs=observations,

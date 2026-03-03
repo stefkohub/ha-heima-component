@@ -43,6 +43,11 @@ from .const import (
     OPT_ROOMS,
     OPT_SECURITY,
 )
+from .runtime.normalization.config import (
+    normalize_source_weights,
+    normalize_weighted_fusion_fields,
+    validate_weighted_fusion_fields,
+)
 
 PRESENCE_METHODS = ["ha_person", "quorum", "manual"]
 PEOPLE_GROUP_LOGIC = ["quorum", "weighted_quorum"]
@@ -187,35 +192,24 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         if data.get("person_entity"):
             data["person_entity"] = str(data["person_entity"])
         data["sources"] = self._normalize_multi_value(data.get("sources"))
-        self._normalize_group_fusion_fields(data)
+        normalize_weighted_fusion_fields(
+            data,
+            strategy_key="group_strategy",
+            allowed_strategies=PEOPLE_GROUP_LOGIC,
+            default_strategy="quorum",
+        )
         return data
 
     def _normalize_people_anonymous_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         data = dict(payload)
         data["sources"] = self._normalize_multi_value(data.get("sources"))
-        self._normalize_group_fusion_fields(data)
+        normalize_weighted_fusion_fields(
+            data,
+            strategy_key="group_strategy",
+            allowed_strategies=PEOPLE_GROUP_LOGIC,
+            default_strategy="quorum",
+        )
         return data
-
-    def _normalize_group_fusion_fields(self, data: dict[str, Any]) -> None:
-        group_strategy = str(data.get("group_strategy", "quorum") or "quorum").strip()
-        if group_strategy not in PEOPLE_GROUP_LOGIC:
-            group_strategy = "quorum"
-        data["group_strategy"] = group_strategy
-        if group_strategy != "weighted_quorum":
-            data.pop("weight_threshold", None)
-            data.pop("source_weights", None)
-            return
-
-        if data.get("weight_threshold") in ("", None):
-            data.pop("weight_threshold", None)
-        elif "weight_threshold" in data:
-            data["weight_threshold"] = float(data["weight_threshold"])
-
-        source_weights = self._normalize_source_weights(data.get("source_weights"))
-        if source_weights:
-            data["source_weights"] = source_weights
-        else:
-            data.pop("source_weights", None)
 
     def _normalize_room_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         data = dict(payload)
@@ -242,46 +236,12 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         elif "weight_threshold" in data:
             data["weight_threshold"] = float(data["weight_threshold"])
 
-        source_weights = self._normalize_source_weights(data.get("source_weights"))
+        source_weights = normalize_source_weights(data.get("source_weights"))
         if source_weights:
             data["source_weights"] = source_weights
         else:
             data.pop("source_weights", None)
         return data
-
-    def _normalize_source_weights(self, value: Any) -> dict[str, float]:
-        """Normalize room source weights from form input into a stable mapping."""
-        if value in (None, ""):
-            return {}
-        if isinstance(value, dict):
-            result: dict[str, float] = {}
-            for entity_id, weight in value.items():
-                entity_key = str(entity_id).strip()
-                if not entity_key:
-                    continue
-                try:
-                    result[entity_key] = float(weight)
-                except (TypeError, ValueError):
-                    continue
-            return result
-
-        result: dict[str, float] = {}
-        text = str(value)
-        for raw_line in text.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            if "=" not in line:
-                continue
-            entity_id, raw_weight = line.split("=", 1)
-            entity_key = entity_id.strip()
-            if not entity_key:
-                continue
-            try:
-                result[entity_key] = float(raw_weight.strip())
-            except (TypeError, ValueError):
-                continue
-        return result
 
     def _normalize_lighting_room_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         data = dict(payload)
@@ -497,7 +457,13 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         elif user_input.get("group_strategy", "quorum") == "quorum" and sources and required > len(sources):
             errors["required"] = "invalid_required"
         elif user_input.get("group_strategy") == "weighted_quorum":
-            errors.update(self._validate_group_weighted_quorum(user_input))
+            errors.update(
+                validate_weighted_fusion_fields(
+                    payload=user_input,
+                    strategy_key="group_strategy",
+                    sources=sources,
+                )
+            )
 
         if errors:
             return self.async_show_form(
@@ -602,36 +568,13 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
             elif payload.get("group_strategy", "quorum") == "quorum" and required > len(sources):
                 errors["required"] = "invalid_required"
             if payload.get("group_strategy") == "weighted_quorum":
-                errors.update(self._validate_group_weighted_quorum(payload))
-        return errors
-
-    def _validate_group_weighted_quorum(self, payload: dict[str, Any]) -> dict[str, str]:
-        errors: dict[str, str] = {}
-        if "weight_threshold" in payload:
-            try:
-                threshold = float(payload.get("weight_threshold"))
-            except (TypeError, ValueError):
-                errors["weight_threshold"] = "invalid_number"
-            else:
-                if threshold <= 0:
-                    errors["weight_threshold"] = "invalid_number"
-
-        sources = {str(source) for source in payload.get("sources", [])}
-        source_weights = payload.get("source_weights", {})
-        if not isinstance(source_weights, dict):
-            errors["source_weights"] = "invalid_format"
-            return errors
-        for entity_id, weight in source_weights.items():
-            if str(entity_id) not in sources:
-                errors["source_weights"] = "invalid_mapping"
-                return errors
-            try:
-                if float(weight) <= 0:
-                    errors["source_weights"] = "invalid_mapping"
-                    return errors
-            except (TypeError, ValueError):
-                errors["source_weights"] = "invalid_mapping"
-                return errors
+                errors.update(
+                    validate_weighted_fusion_fields(
+                        payload=payload,
+                        strategy_key="group_strategy",
+                        sources=sources,
+                    )
+                )
         return errors
 
     # ---- Rooms (occupancy) ----
