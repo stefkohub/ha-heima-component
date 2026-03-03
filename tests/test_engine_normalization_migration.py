@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from custom_components.heima.runtime.engine import HeimaEngine
-from custom_components.heima.runtime.normalization.contracts import build_observation
+from custom_components.heima.runtime.normalization.contracts import DerivedObservation, build_observation
 
 
 class _FakeStates:
@@ -64,12 +64,17 @@ class _FakeNormalizer:
         required = int(cfg.get("required", 1))
         on_count = sum(1 for obs in inputs if obs.state == "on")
         state = "on" if on_count >= required else "off"
-        return build_observation(
+        return DerivedObservation(
             kind=kind,
             state=state,
             confidence=100 if state == "on" else 0,
             raw_state=None,
             source_entity_id=None,
+            inputs=[obs.source_entity_id or f"{obs.kind}:{obs.state}" for obs in inputs],
+            fusion_strategy="fake",
+            plugin_id=str(cfg.get("plugin_id", "fake.plugin")),
+            plugin_api_version=1,
+            evidence={},
             reason="derived",
         )
 
@@ -81,12 +86,17 @@ class _FailSafeCaptureNormalizer(_FakeNormalizer):
     def derive(self, *, kind, inputs, strategy_cfg=None, context=None):
         cfg = dict(strategy_cfg or {})
         self.derive_calls.append((kind, str(cfg.get("plugin_id")), cfg))
-        return build_observation(
+        return DerivedObservation(
             kind=kind,
             state="off",
             confidence=0,
             raw_state=None,
             source_entity_id=None,
+            inputs=[obs.source_entity_id or f"{obs.kind}:{obs.state}" for obs in inputs],
+            fusion_strategy="fake",
+            plugin_id=str(cfg.get("plugin_id", "fake.plugin")),
+            plugin_api_version=1,
+            evidence={},
             reason="derived",
         )
 
@@ -122,11 +132,11 @@ def test_compute_group_presence_uses_quorum_plugin():
     fake = _FakeNormalizer()
     engine._normalizer = fake
 
-    is_home, active_count = engine._compute_group_presence(
+    fused, active_count = engine._compute_group_presence(
         ["binary_sensor.room", "binary_sensor.other"], required=1
     )
 
-    assert is_home is True
+    assert fused.state == "on"
     assert active_count == 1
     assert fake.derive_calls == [
         (
@@ -165,11 +175,11 @@ def test_compute_group_presence_requests_fail_safe_off_fallback():
     fake = _FailSafeCaptureNormalizer()
     engine._normalizer = fake
 
-    is_home, active_count = engine._compute_group_presence(
+    fused, active_count = engine._compute_group_presence(
         ["binary_sensor.room", "binary_sensor.other"], required=1
     )
 
-    assert is_home is False
+    assert fused.state == "off"
     assert active_count == 1
     assert fake.derive_calls == [
         (
@@ -192,18 +202,78 @@ def test_compute_group_presence_records_local_trace():
         }
     )
 
-    is_home, active_count = engine._compute_group_presence(
+    fused, active_count = engine._compute_group_presence(
         ["binary_sensor.room", "binary_sensor.other"],
         required=1,
         trace_key="person:stefano",
     )
 
-    assert is_home is True
+    assert fused.state == "on"
     assert active_count == 1
     diagnostics = engine.diagnostics()
     trace = diagnostics["presence"]["group_trace"]["person:stefano"]
     assert trace["plugin_id"] == "builtin.quorum"
+    assert trace["group_strategy"] == "quorum"
     assert trace["required"] == 1
     assert trace["active_count"] == 1
+    assert trace["used_plugin_fallback"] is False
+    assert trace["fused_observation"]["state"] == "on"
+
+
+def test_compute_group_presence_supports_weighted_quorum_strategy():
+    engine = _engine()
+    fake = _FakeNormalizer()
+    engine._normalizer = fake
+
+    fused, active_count = engine._compute_group_presence(
+        ["binary_sensor.room", "binary_sensor.other"],
+        required=1,
+        strategy="weighted_quorum",
+        weight_threshold=1.2,
+        source_weights={
+            "binary_sensor.room": 0.8,
+            "binary_sensor.other": 0.4,
+        },
+    )
+
+    assert fused.state == "on"
+    assert active_count == 1
+    assert fake.derive_calls == [
+        (
+            "presence",
+            "builtin.weighted_quorum",
+            {
+                "plugin_id": "builtin.weighted_quorum",
+                "fallback_state": "off",
+                "threshold": 1.2,
+                "weights": {
+                    "binary_sensor.room": 0.8,
+                    "binary_sensor.other": 0.4,
+                },
+            },
+        )
+    ]
+
+
+def test_compute_house_signal_uses_plugin_fusion_and_trace():
+    engine = _engine({"binary_sensor.relax_mode": "on"})
+    fake = _FakeNormalizer()
+    engine._normalizer = fake
+
+    is_on = engine._compute_house_signal("relax_mode", ["binary_sensor.relax_mode"])
+
+    assert is_on is True
+    assert fake.derive_calls == [
+        (
+            "boolean_signal",
+            "builtin.any_of",
+            {
+                "plugin_id": "builtin.any_of",
+                "fallback_state": "off",
+            },
+        )
+    ]
+    trace = engine.diagnostics()["house_signals"]["trace"]["relax_mode"]
+    assert trace["plugin_id"] == "builtin.any_of"
     assert trace["used_plugin_fallback"] is False
     assert trace["fused_observation"]["state"] == "on"

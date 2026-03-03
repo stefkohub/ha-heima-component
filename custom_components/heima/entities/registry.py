@@ -18,7 +18,6 @@ from ..const import (
 )
 
 LIGHTING_INTENTS = ["auto", "off", "scene_evening", "scene_relax", "scene_night"]
-HEATING_INTENTS = ["auto", "eco", "comfort", "preheat", "off"]
 SECURITY_INTENTS = ["auto", "armed_away", "armed_home", "disarmed"]
 
 
@@ -125,9 +124,13 @@ def build_registry(entry: ConfigEntry) -> HeimaRegistry:
     # Heating
     heating = options.get(OPT_HEATING, {})
     if heating:
-        selects.append(
-            _sel(_k("heima_heating_intent"), "Heima Heating Intent", HEATING_INTENTS)
-        )
+        sensors.append(_s(_k("heima_heating_state"), "Heima Heating State"))
+        sensors.append(_s(_k("heima_heating_reason"), "Heima Heating Reason"))
+        sensors.append(_s(_k("heima_heating_phase"), "Heima Heating Phase"))
+        sensors.append(_s(_k("heima_heating_branch"), "Heima Heating Branch"))
+        sensors.append(_s(_k("heima_heating_target_temp"), "Heima Heating Target Temp"))
+        sensors.append(_s(_k("heima_heating_current_setpoint"), "Heima Heating Current Setpoint"))
+        sensors.append(_s(_k("heima_heating_last_applied_target"), "Heima Heating Last Applied Target"))
         binaries.append(_b(_k("heima_heating_manual_hold"), "Heima Heating Manual Hold"))
         binaries.append(_b(_k("heima_heating_applying_guard"), "Heima Heating Applying Guard"))
 

@@ -29,6 +29,16 @@ OPT_NOTIFICATIONS = "notifications"
 DEFAULT_ENGINE_ENABLED = True
 DEFAULT_LIGHTING_APPLY_MODE = "scene"
 
+HOUSE_STATES_CANONICAL = [
+    "away",
+    "home",
+    "guest",
+    "vacation",
+    "sleeping",
+    "relax",
+    "working",
+]
+
 EVENT_CATEGORIES_ALL = [
     "people",
     "occupancy",

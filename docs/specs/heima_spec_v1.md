@@ -160,17 +160,19 @@ Room-scene mappings are optional per intent. For `off`, if no room `scene_off` i
 ## 6. Heating Domain
 
 Entities:
-- `select.heima_heating_intent`
+- `sensor.heima_heating_state`
+- `sensor.heima_heating_reason`
+- `sensor.heima_heating_phase`
+- `sensor.heima_heating_branch`
+- `sensor.heima_heating_target_temp`
+- `sensor.heima_heating_current_setpoint`
+- `sensor.heima_heating_last_applied_target`
 - `binary_sensor.heima_heating_manual_hold`
 - `binary_sensor.heima_heating_applying_guard`
-
-Intents:
-`auto | eco | comfort | preheat | off`
 
 Safe apply features (v1):
 - rate limiting
 - idempotent apply (reconciliation)
-- verification & retry
 - manual override detection
 
 Apply modes:

@@ -219,7 +219,6 @@ async def test_apply_plan_ignores_scene_turn_on_service_race():
         people_count=1,
         occupied_rooms=["soggiorno"],
         lighting_intents={"zona": "scene_evening"},
-        heating_intent="auto",
         security_state="unknown",
         notes="test",
     )
@@ -293,7 +292,6 @@ def test_room_in_multiple_zones_reports_conflict_in_diagnostics():
         people_count=1,
         occupied_rooms=["soggiorno"],
         lighting_intents={"zona_a": "scene_evening", "zona_b": "scene_evening"},
-        heating_intent="auto",
         security_state="unknown",
         notes="test",
     )
@@ -347,7 +345,6 @@ def test_conflict_first_valid_step_wins_after_prior_skip():
         people_count=1,
         occupied_rooms=["soggiorno"],
         lighting_intents={"zona_a": "scene_evening", "zona_b": "off"},
-        heating_intent="auto",
         security_state="unknown",
         notes="test",
     )

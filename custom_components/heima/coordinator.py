@@ -6,12 +6,12 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
-from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import DOMAIN
 from .models import HeimaRuntimeState
 from .runtime.engine import HeimaEngine
+from .runtime.scheduler import RuntimeScheduler
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,7 +29,11 @@ class HeimaCoordinator(DataUpdateCoordinator[HeimaRuntimeState]):
         self.entry = entry
         self.engine = HeimaEngine(hass, entry)
         self._unsub_state_changed = None
-        self._unsub_dwell_recheck = None
+        self._scheduler = RuntimeScheduler(
+            hass,
+            entry_id=entry.entry_id,
+            on_job_due=self._async_handle_scheduled_job,
+        )
         self.data = HeimaRuntimeState(
             health_ok=True,
             health_reason="booting",
@@ -38,6 +42,10 @@ class HeimaCoordinator(DataUpdateCoordinator[HeimaRuntimeState]):
             last_decision="",
             last_action="",
         )
+
+    @property
+    def scheduler(self) -> RuntimeScheduler:
+        return self._scheduler
 
     async def _async_update_data(self) -> HeimaRuntimeState:
         """Return current runtime state for coordinator refreshes.
@@ -50,7 +58,7 @@ class HeimaCoordinator(DataUpdateCoordinator[HeimaRuntimeState]):
         """Initialize runtime and publish base state."""
         await self.engine.async_initialize()
         self._subscribe_state_changes()
-        self._schedule_dwell_recheck()
+        self._sync_scheduler()
         self.data = HeimaRuntimeState(
             health_ok=self.engine.health.ok,
             health_reason=self.engine.health.reason,
@@ -65,7 +73,7 @@ class HeimaCoordinator(DataUpdateCoordinator[HeimaRuntimeState]):
         """Reload options and refresh state."""
         await self.engine.async_reload_options(self.entry)
         self._resubscribe_state_changes()
-        self._schedule_dwell_recheck()
+        self._sync_scheduler()
         self.data = HeimaRuntimeState(
             health_ok=self.engine.health.ok,
             health_reason=self.engine.health.reason,
@@ -87,7 +95,7 @@ class HeimaCoordinator(DataUpdateCoordinator[HeimaRuntimeState]):
             last_decision=f"evaluation_requested:{reason}",
             last_action="",
         )
-        self._schedule_dwell_recheck()
+        self._sync_scheduler()
         await self.async_refresh()
 
     async def async_emit_event(
@@ -121,10 +129,49 @@ class HeimaCoordinator(DataUpdateCoordinator[HeimaRuntimeState]):
         await self.async_refresh()
         return emitted
 
+    async def async_set_house_state_override(self, *, mode: str, enabled: bool) -> str:
+        """Set or clear the runtime-only final house-state override."""
+        action, previous, current = self.engine.set_house_state_override(
+            mode=mode,
+            enabled=enabled,
+            source="service:heima.set_mode",
+        )
+        await self.engine.async_emit_external_event(
+            event_type="system.house_state_override_changed",
+            key=(
+                "system.house_state_override_changed:"
+                f"{previous or 'none'}->{current or 'none'}:{action}"
+            ),
+            severity="info",
+            title="House-state override changed",
+            message=(
+                f"House-state override {action}: "
+                f"{previous or 'none'} -> {current or 'none'}."
+            ),
+            context={
+                "previous": previous,
+                "current": current,
+                "source": "service:heima.set_mode",
+                "action": action,
+            },
+        )
+        snapshot = await self.engine.async_evaluate(reason=f"service:set_mode:{mode}:{enabled}")
+        self.data = HeimaRuntimeState(
+            health_ok=self.engine.health.ok,
+            health_reason=self.engine.health.reason,
+            house_state=snapshot.house_state,
+            house_state_reason=self.engine.state.get_sensor("heima_house_state_reason") or "",
+            last_decision=f"evaluation_requested:service:set_mode:{mode}:{enabled}",
+            last_action=f"house_state_override:{action}",
+        )
+        self._sync_scheduler()
+        await self.async_refresh()
+        return action
+
     async def async_shutdown(self) -> None:
         """Shutdown runtime."""
         self._unsubscribe_state_changes()
-        self._unsubscribe_dwell_recheck()
+        await self._scheduler.async_shutdown()
         await self.engine.async_shutdown()
         _LOGGER.debug("Heima runtime shutdown")
 
@@ -137,24 +184,11 @@ class HeimaCoordinator(DataUpdateCoordinator[HeimaRuntimeState]):
             self._unsub_state_changed()
             self._unsub_state_changed = None
 
-    def _unsubscribe_dwell_recheck(self) -> None:
-        if self._unsub_dwell_recheck:
-            self._unsub_dwell_recheck()
-            self._unsub_dwell_recheck = None
+    def _sync_scheduler(self) -> None:
+        self._scheduler.sync_jobs(self.engine.scheduled_runtime_jobs())
 
-    def _schedule_dwell_recheck(self) -> None:
-        self._unsubscribe_dwell_recheck()
-        delay = self.engine.next_dwell_recheck_delay_s()
-        if delay is None:
-            return
-        delay = max(0.1, float(delay))
-
-        @callback
-        def _handle_dwell_recheck(_now) -> None:
-            self._unsub_dwell_recheck = None
-            self.hass.async_create_task(self.async_request_evaluation(reason="dwell_recheck"))
-
-        self._unsub_dwell_recheck = async_call_later(self.hass, delay, _handle_dwell_recheck)
+    async def _async_handle_scheduled_job(self, job_id: str) -> None:
+        await self.async_request_evaluation(reason=f"scheduler:{job_id}")
 
     def _subscribe_state_changes(self) -> None:
         tracked_entities = self.engine.tracked_entity_ids()

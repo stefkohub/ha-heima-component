@@ -22,11 +22,23 @@ This folder contains the canonical, versioned specifications for the Heima Home 
 - **Input Normalization Layer SPEC v1** — Shared facade/contracts for normalized observations and gradual migration from raw HA states  
   File: `heima_input_normalization_layer_spec_v1.md`
 
+- **Runtime Scheduler Mini-SPEC v1** — Shared internal timing subsystem for delayed and deadline-based runtime rechecks  
+  File: `heima_runtime_scheduler_spec_v1.md`
+
 - **Event Catalog SPEC v1** — Standard events, keys, severity, payloads, dedup/rate-limit rules  
   File: `heima_event_catalog_spec_v1.md`
 
 - **Mapping Model SPEC v1** — Lighting mapping (room→scenes, zone→rooms), holds, behavior clamps, fallback, idempotency  
   File: `heima_mapping_model_spec_v1.md`
+
+- **Heating Domain Mini-SPEC v1** — Scheduler-following baseline, fixed vacation override branch, apply guards, diagnostics  
+  File: `heima_domain_heating_spec_v1.md`
+
+- **House-State Override Service Mini-SPEC v1** — Concrete v1 semantics for `heima.set_mode` as a final house-state override  
+  File: `heima_house_state_override_service_spec_v1.md`
+
+- **Policy Plugin Framework Mini-SPEC v1** — Future cross-domain policy extension model (separate from normalization plugins)  
+  File: `heima_policy_plugin_framework_spec_v1.md`
 
 - **Extension Strategy SPEC v1 (Solution A)** — Event bus + HA services interface for third-party extensions  
   File: `heima_extension_strategy_spec_v1_solution_a.md`
@@ -75,7 +87,11 @@ docs/
     heima_options_flow_spec_v1.md
     heima_event_catalog_spec_v1.md
     heima_input_normalization_layer_spec_v1.md
+    heima_runtime_scheduler_spec_v1.md
     heima_mapping_model_spec_v1.md
+    heima_domain_heating_spec_v1.md
+    heima_house_state_override_service_spec_v1.md
+    heima_policy_plugin_framework_spec_v1.md
     heima_extension_strategy_spec_v1_solution_a.md
     INDEX.md
 ```

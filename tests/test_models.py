@@ -17,4 +17,4 @@ def test_snapshot_empty_defaults():
     assert snap.house_state == "unknown"
     assert snap.anyone_home is False
     assert snap.people_count == 0
-    assert snap.heating_intent == "auto"
+    assert snap.security_state == "unknown"

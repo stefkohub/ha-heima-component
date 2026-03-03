@@ -28,22 +28,25 @@ command:
 
 set_mode:
   name: Heima Set Mode
-  description: Toggle high-level Heima mode.
+  description: Set or clear a final house-state override.
   fields:
     mode:
       name: Mode
-      description: Mode to toggle.
+      description: Canonical house state to force while the override is active.
       required: true
       selector:
         select:
           options:
-            - engine_enabled
+            - away
+            - home
             - guest
             - vacation
+            - sleeping
             - relax
+            - working
     state:
       name: State
-      description: Desired mode state.
+      description: True sets the override, false clears it only if the current override matches the selected mode.
       required: true
       selector:
         boolean:

@@ -23,6 +23,7 @@ from ..const import (
     DEFAULT_SECURITY_MISMATCH_PERSIST_S,
     DEFAULT_SECURITY_MISMATCH_POLICY,
     EVENT_CATEGORIES_ALL,
+    OPT_HEATING,
     OPT_LIGHTING_APPLY_MODE,
     OPT_LIGHTING_ROOMS,
     OPT_LIGHTING_ZONES,
@@ -36,10 +37,18 @@ from ..entities.registry import build_registry
 from ..models import HeimaOptions
 from .contracts import ApplyPlan, ApplyStep, HeimaEvent
 from .lighting import pick_scene_for_intent_with_trace, resolve_zone_intent
+from .normalization.config import (
+    GROUP_PRESENCE_STRATEGY_CONTRACT,
+    HOUSE_SIGNAL_STRATEGY_CONTRACT,
+    ROOM_OCCUPANCY_STRATEGY_CONTRACT,
+    SECURITY_CORROBORATION_STRATEGY_CONTRACT,
+    build_signal_set_strategy_cfg_for_contract,
+)
 from .normalization.service import InputNormalizer
 from .notifications import HeimaEventPipeline
 from .policy import resolve_house_state
 from .snapshot import DecisionSnapshot
+from .scheduler import ScheduledRuntimeJob
 from .state_store import CanonicalState
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,6 +62,7 @@ _HOUSE_SIGNAL_ENTITIES = {
 }
 
 _LIGHTING_MIN_SECONDS_BETWEEN_APPLIES = 10
+_HEATING_MIN_SECONDS_BETWEEN_APPLIES = 60
 
 
 @dataclass(frozen=True)
@@ -80,6 +90,15 @@ class HeimaEngine:
         self._lighting_zone_trace: dict[str, dict[str, Any]] = {}
         self._lighting_room_trace: dict[str, list[dict[str, Any]]] = {}
         self._lighting_conflicts_last_eval: list[dict[str, Any]] = []
+        self._heating_trace: dict[str, Any] = {}
+        self._heating_last_target_temp: float | None = None
+        self._heating_last_apply_ts: float | None = None
+        self._heating_last_reported_phase: str | None = None
+        self._heating_last_reported_target: float | None = None
+        self._heating_last_reported_branch: str | None = None
+        self._house_state_override: str | None = None
+        self._house_state_override_set_by: str | None = None
+        self._house_state_override_last_change_ts: str | None = None
         self._last_engine_enabled_state: bool | None = None
         self._events = HeimaEventPipeline(hass)
         self._normalizer = InputNormalizer(hass)
@@ -95,8 +114,10 @@ class HeimaEngine:
         self._occupancy_room_effective_since: dict[str, float] = {}
         self._occupancy_room_trace: dict[str, dict[str, Any]] = {}
         self._group_presence_trace: dict[str, dict[str, Any]] = {}
-        self._next_timed_recheck_at: float | None = None
+        self._house_signals_trace: dict[str, dict[str, Any]] = {}
+        self._timed_rechecks: dict[str, dict[str, Any]] = {}
         self._security_observation_trace: dict[str, Any] = {}
+        self._security_corroboration_trace: dict[str, Any] = {}
         self._security_armed_away_but_home_since: float | None = None
         self._security_armed_away_but_home_emitted: bool = False
 
@@ -127,8 +148,37 @@ class HeimaEngine:
         _LOGGER.debug("Heima engine reload options")
         self._entry = entry
         self._options = HeimaOptions.from_entry(entry)
+        self._house_state_override = None
+        self._house_state_override_set_by = None
+        self._house_state_override_last_change_ts = None
         self._build_default_state()
         await self.async_evaluate(reason="options_reloaded")
+
+    def set_house_state_override(
+        self,
+        *,
+        mode: str,
+        enabled: bool,
+        source: str,
+    ) -> tuple[str, str | None, str | None]:
+        previous = self._house_state_override
+        current = previous
+        action = "noop"
+
+        if enabled:
+            if previous != mode:
+                current = mode
+                action = "set"
+        elif previous == mode:
+            current = None
+            action = "clear"
+
+        if action != "noop":
+            self._house_state_override = current
+            self._house_state_override_set_by = source
+            self._house_state_override_last_change_ts = datetime.now(timezone.utc).isoformat()
+
+        return action, previous, current
 
     async def async_evaluate(self, reason: str) -> DecisionSnapshot:
         """Evaluate canonical state from configured bindings."""
@@ -211,6 +261,19 @@ class HeimaEngine:
         if security_entity:
             tracked.add(str(security_entity))
 
+        heating = options.get(OPT_HEATING, {})
+        for key in (
+            "climate_entity",
+            "outdoor_temperature_entity",
+            "vacation_hours_from_start_entity",
+            "vacation_hours_to_end_entity",
+            "vacation_total_hours_entity",
+            "vacation_is_long_entity",
+        ):
+            value = heating.get(key)
+            if value:
+                tracked.add(str(value))
+
         return tracked
 
     def _build_default_state(self) -> None:
@@ -233,11 +296,25 @@ class HeimaEngine:
             self._state.sensors["heima_last_event"] = ""
         if "heima_event_stats" in self._state.sensors:
             self._state.sensors["heima_event_stats"] = "{}"
+        if "heima_heating_state" in self._state.sensors:
+            self._state.sensors["heima_heating_state"] = "idle"
+        if "heima_heating_reason" in self._state.sensors:
+            self._state.sensors["heima_heating_reason"] = "not_configured"
+        if "heima_heating_phase" in self._state.sensors:
+            self._state.sensors["heima_heating_phase"] = "normal"
+        if "heima_heating_branch" in self._state.sensors:
+            self._state.sensors["heima_heating_branch"] = "disabled"
+        if "heima_heating_target_temp" in self._state.sensors:
+            self._state.sensors["heima_heating_target_temp"] = None
+        if "heima_heating_current_setpoint" in self._state.sensors:
+            self._state.sensors["heima_heating_current_setpoint"] = None
+        if "heima_heating_last_applied_target" in self._state.sensors:
+            self._state.sensors["heima_heating_last_applied_target"] = None
 
     def _compute_snapshot(self, reason: str) -> DecisionSnapshot:
         options = dict(self._entry.options)
         now = datetime.now(timezone.utc).isoformat()
-        self._next_timed_recheck_at = None
+        self._timed_rechecks = {}
 
         named_people = options.get(OPT_PEOPLE_NAMED, [])
         home_people: list[str] = []
@@ -270,12 +347,16 @@ class HeimaEngine:
         if anon_cfg.get("enabled"):
             anon_sources = list(anon_cfg.get("sources", []))
             required = int(anon_cfg.get("required", 1))
-            anon_home, active_count = self._compute_group_presence(
+            anon_fused, active_count = self._compute_group_presence(
                 anon_sources,
                 required,
+                strategy=str(anon_cfg.get("group_strategy", "quorum") or "quorum"),
+                weight_threshold=anon_cfg.get("weight_threshold"),
+                source_weights=anon_cfg.get("source_weights"),
                 trace_key="anonymous",
             )
-            anon_confidence = 100 if anon_home else 0
+            anon_home = anon_fused.state == "on"
+            anon_confidence = int(anon_fused.confidence)
             anon_source = ",".join(anon_sources) if anon_sources else "none"
             anon_weight = int(anon_cfg.get("anonymous_count_weight", 1)) if anon_home else 0
             prev_anon_home = self._state.get_binary("heima_anonymous_presence")
@@ -338,13 +419,28 @@ class HeimaEngine:
                 "source_entity_id": None,
             }
 
-        vacation_mode = self._is_on_any(["input_boolean.vacation_mode"])
-        guest_mode = self._is_on_any(["input_boolean.guest_mode"])
-        sleep_window = self._is_on_any(["binary_sensor.sleep_window"])
-        relax_mode = self._is_on_any(["binary_sensor.relax_mode"])
-        work_window = self._is_on_any(["binary_sensor.work_window"])
+        vacation_mode = self._compute_house_signal(
+            "vacation_mode",
+            ["input_boolean.vacation_mode"],
+        )
+        guest_mode = self._compute_house_signal(
+            "guest_mode",
+            ["input_boolean.guest_mode"],
+        )
+        sleep_window = self._compute_house_signal(
+            "sleep_window",
+            ["binary_sensor.sleep_window"],
+        )
+        relax_mode = self._compute_house_signal(
+            "relax_mode",
+            ["binary_sensor.relax_mode"],
+        )
+        work_window = self._compute_house_signal(
+            "work_window",
+            ["binary_sensor.work_window"],
+        )
 
-        house_state, house_reason = resolve_house_state(
+        derived_house_state, derived_house_reason = resolve_house_state(
             anyone_home=anyone_home,
             vacation_mode=vacation_mode,
             guest_mode=guest_mode,
@@ -352,13 +448,19 @@ class HeimaEngine:
             relax_mode=relax_mode,
             work_window=work_window,
         )
+        if self._house_state_override:
+            house_state = self._house_state_override
+            house_reason = f"manual_override:{self._house_state_override}"
+        else:
+            house_state = derived_house_state
+            house_reason = derived_house_reason
 
         lighting_intents = self._compute_lighting_intents(
             house_state=house_state,
             occupied_rooms=occupied_rooms,
         )
 
-        heating_intent = self._state.get_select("heima_heating_intent") or "auto"
+        self._compute_heating_runtime(house_state=house_state)
 
         self._state.set_binary("heima_anyone_home", anyone_home)
         self._state.set_sensor("heima_people_count", people_count)
@@ -396,20 +498,652 @@ class HeimaEngine:
             people_count=people_count,
             occupied_rooms=occupied_rooms,
             lighting_intents=lighting_intents,
-            heating_intent=heating_intent,
             security_state=security_state,
             notes=f"reason={reason}",
         )
 
-    def next_dwell_recheck_delay_s(self) -> float | None:
-        """Return seconds until next timed recheck should be evaluated."""
-        if self._next_timed_recheck_at is None:
-            return None
-        return max(0.0, self._next_timed_recheck_at - time.monotonic())
+    def scheduled_runtime_jobs(self) -> dict[str, ScheduledRuntimeJob]:
+        jobs: dict[str, ScheduledRuntimeJob] = {}
+        entry_id = str(getattr(self._entry, "entry_id", ""))
+        for job_id, spec in self._timed_rechecks.items():
+            jobs[job_id] = ScheduledRuntimeJob(
+                job_id=job_id,
+                owner=str(spec.get("owner", "runtime")),
+                entry_id=entry_id,
+                due_monotonic=float(spec["due_monotonic"]),
+                label=str(spec.get("label", job_id)),
+            )
+        return jobs
 
-    def _schedule_timed_recheck_deadline(self, deadline: float) -> None:
-        if self._next_timed_recheck_at is None or deadline < self._next_timed_recheck_at:
-            self._next_timed_recheck_at = deadline
+    def next_dwell_recheck_delay_s(self) -> float | None:
+        """Return seconds until the earliest scheduled runtime recheck.
+
+        Kept as a thin compatibility helper while tests and callers migrate to
+        the explicit scheduler model.
+        """
+        jobs = self.scheduled_runtime_jobs()
+        if not jobs:
+            return None
+        next_due = min(job.due_monotonic for job in jobs.values())
+        return max(0.0, next_due - time.monotonic())
+
+    def _schedule_timed_recheck_deadline(
+        self,
+        *,
+        job_id: str,
+        deadline: float,
+        owner: str,
+        label: str,
+    ) -> None:
+        current = self._timed_rechecks.get(job_id)
+        if current is not None and float(current["due_monotonic"]) <= deadline:
+            return
+        self._timed_rechecks[job_id] = {
+            "owner": owner,
+            "label": label,
+            "due_monotonic": deadline,
+        }
+
+    def _compute_heating_runtime(self, *, house_state: str) -> None:
+        heating_cfg = dict(self._entry.options.get(OPT_HEATING, {}))
+        if not heating_cfg:
+            self._heating_trace = {
+                "configured": False,
+                "state": "idle",
+                "reason": "not_configured",
+                "phase": "normal",
+                "target_temperature": None,
+            }
+            return
+
+        climate_entity = str(heating_cfg.get("climate_entity", "")).strip()
+        apply_mode = str(heating_cfg.get("apply_mode", "delegate_to_scheduler") or "delegate_to_scheduler")
+        branches = heating_cfg.get("override_branches", {})
+        branch_cfg = dict(branches.get(house_state, {})) if isinstance(branches, dict) else {}
+        branch_type = str(branch_cfg.get("branch", "disabled") or "disabled")
+        manual_guard_enabled = bool(heating_cfg.get("manual_override_guard", True))
+        manual_hold = bool(self._state.get_binary("heima_heating_manual_hold"))
+        temperature_step = self._coerce_positive_float(heating_cfg.get("temperature_step"), default=0.5)
+        current_setpoint = self._current_climate_setpoint(climate_entity)
+        outdoor_temperature = self._coerce_float_from_entity(heating_cfg.get("outdoor_temperature_entity"))
+        climate_preset_mode = self._coerce_text(self._state_attr(climate_entity, "preset_mode"))
+        climate_manual_override = self._heating_climate_manual_override_detected(climate_preset_mode)
+        manual_override_active = manual_hold or climate_manual_override
+        manual_override_source = (
+            "heima_manual_hold"
+            if manual_hold
+            else "climate_preset"
+            if climate_manual_override
+            else None
+        )
+
+        previous_reason = self._state.get_sensor("heima_heating_reason")
+        state = "delegated"
+        reason = "normal_scheduler_delegate"
+        phase = "normal"
+        target_temperature: float | None = None
+        apply_allowed = False
+        applying_guard = False
+        skip_small_delta = False
+        skip_rate_limited = False
+        vacation_meta: dict[str, Any] = {}
+
+        if branch_type == "scheduler_delegate":
+            reason = "scheduler_delegate_branch"
+            phase = "scheduler_delegate"
+        elif branch_type == "fixed_target":
+            phase = "fixed_target"
+            target_temperature = self._coerce_positive_float(branch_cfg.get("target_temperature"), default=None)
+            if target_temperature is None:
+                state = "inactive"
+                reason = "invalid_target_temperature"
+                applying_guard = True
+            else:
+                (
+                    state,
+                    reason,
+                    apply_allowed,
+                    applying_guard,
+                    skip_small_delta,
+                    skip_rate_limited,
+                ) = self._finalize_heating_target(
+                    branch_reason="fixed_target_branch",
+                    target_temperature=target_temperature,
+                    apply_mode=apply_mode,
+                    manual_override_active=manual_override_active if manual_guard_enabled else False,
+                    current_setpoint=current_setpoint,
+                    temperature_step=temperature_step,
+                )
+        elif branch_type == "vacation_curve":
+            (
+                target_temperature,
+                phase,
+                vacation_meta,
+                vacation_error,
+            ) = self._resolve_vacation_curve_target(
+                heating_cfg=heating_cfg,
+                branch_cfg=branch_cfg,
+                outdoor_temperature=outdoor_temperature,
+                temperature_step=temperature_step,
+            )
+            if vacation_error:
+                state = "inactive"
+                reason = vacation_error
+                applying_guard = True
+            elif target_temperature is None:
+                state = "inactive"
+                reason = "vacation_curve_not_resolved"
+                applying_guard = True
+            else:
+                (
+                    state,
+                    reason,
+                    apply_allowed,
+                    applying_guard,
+                    skip_small_delta,
+                    skip_rate_limited,
+                ) = self._finalize_heating_target(
+                    branch_reason="vacation_curve_branch",
+                    target_temperature=target_temperature,
+                    apply_mode=apply_mode,
+                    manual_override_active=manual_override_active if manual_guard_enabled else False,
+                    current_setpoint=current_setpoint,
+                    temperature_step=temperature_step,
+                )
+        else:
+            branch_type = "disabled"
+
+        self._state.set_sensor("heima_heating_state", state)
+        self._state.set_sensor("heima_heating_reason", reason)
+        self._state.set_sensor("heima_heating_phase", phase)
+        self._state.set_sensor("heima_heating_branch", branch_type)
+        self._state.set_sensor("heima_heating_target_temp", target_temperature)
+        self._state.set_sensor("heima_heating_current_setpoint", current_setpoint)
+        self._state.set_sensor("heima_heating_last_applied_target", self._heating_last_target_temp)
+        self._state.set_binary("heima_heating_applying_guard", applying_guard)
+
+        self._heating_trace = {
+            "configured": True,
+            "climate_entity": climate_entity,
+            "apply_mode": apply_mode,
+            "current_house_state": house_state,
+            "selected_branch": branch_type,
+            "current_setpoint": current_setpoint,
+            "outdoor_temperature": outdoor_temperature,
+            "target_temperature": target_temperature,
+            "temperature_step": temperature_step,
+            "manual_override_guard_enabled": manual_guard_enabled,
+            "manual_hold": manual_hold,
+            "climate_preset_mode": climate_preset_mode,
+            "climate_manual_override_detected": climate_manual_override,
+            "manual_override_active": manual_override_active if manual_guard_enabled else False,
+            "manual_override_source": manual_override_source if manual_guard_enabled else None,
+            "state": state,
+            "reason": reason,
+            "phase": phase,
+            "apply_allowed": apply_allowed,
+            "applying_guard": applying_guard,
+            "skip_small_delta": skip_small_delta,
+            "skip_rate_limited": skip_rate_limited,
+            "rate_limit_window_s": _HEATING_MIN_SECONDS_BETWEEN_APPLIES,
+            "last_applied_target": self._heating_last_target_temp,
+            "last_apply_ts": self._heating_last_apply_ts,
+            "vacation": dict(vacation_meta),
+        }
+        self._queue_heating_runtime_events(
+            selected_branch=branch_type,
+            previous_reason=str(previous_reason) if previous_reason not in (None, "") else None,
+            reason=reason,
+            phase=phase,
+            manual_override_source=manual_override_source if manual_guard_enabled else None,
+            target_temperature=target_temperature,
+            apply_allowed=apply_allowed,
+            skip_small_delta=skip_small_delta,
+        )
+        self._schedule_heating_recheck(
+            selected_branch=branch_type,
+            phase=phase,
+            vacation_meta=vacation_meta,
+            temperature_step=temperature_step,
+        )
+
+    def _queue_heating_runtime_events(
+        self,
+        *,
+        selected_branch: str,
+        previous_reason: str | None,
+        reason: str,
+        phase: str,
+        manual_override_source: str | None,
+        target_temperature: float | None,
+        apply_allowed: bool,
+        skip_small_delta: bool,
+    ) -> None:
+        if self._heating_last_reported_branch is None:
+            self._heating_last_reported_branch = selected_branch
+        elif self._heating_last_reported_branch != selected_branch:
+            self._queue_event(
+                HeimaEvent(
+                    type="heating.branch_changed",
+                    key="heating.branch_changed",
+                    severity="info",
+                    title="Heating branch changed",
+                    message=f"Heating branch changed to '{selected_branch}'.",
+                    context={
+                        "previous": self._heating_last_reported_branch,
+                        "current": selected_branch,
+                    },
+                )
+            )
+            self._heating_last_reported_branch = selected_branch
+
+        if selected_branch == "vacation_curve" and self._heating_last_reported_phase != phase:
+            self._queue_event(
+                HeimaEvent(
+                    type="heating.vacation_phase_changed",
+                    key="heating.vacation_phase_changed",
+                    severity="info",
+                    title="Heating vacation phase changed",
+                    message=f"Heating vacation phase changed to '{phase}'.",
+                    context={"phase": phase},
+                )
+            )
+            self._heating_last_reported_phase = phase
+        elif selected_branch != "vacation_curve":
+            self._heating_last_reported_phase = None
+
+        if apply_allowed and target_temperature is not None and self._heating_last_reported_target != target_temperature:
+            self._queue_event(
+                HeimaEvent(
+                    type="heating.target_changed",
+                    key="heating.target_changed",
+                    severity="info",
+                    title="Heating target changed",
+                    message=f"Heating target updated to {target_temperature}.",
+                    context={
+                        "target_temperature": target_temperature,
+                        "branch": selected_branch,
+                        "phase": phase,
+                    },
+                )
+            )
+            self._heating_last_reported_target = target_temperature
+
+        if reason == "manual_override_blocked" and previous_reason != "manual_override_blocked":
+            self._queue_event(
+                HeimaEvent(
+                    type="heating.manual_override_blocked",
+                    key="heating.manual_override_blocked",
+                    severity="info",
+                    title="Heating blocked by manual override",
+                    message="Heating apply skipped because manual override is active.",
+                    context={
+                        "branch": selected_branch,
+                        "source": manual_override_source or "unknown",
+                    },
+                )
+            )
+
+        if skip_small_delta and previous_reason != "small_delta_skip":
+            self._queue_event(
+                HeimaEvent(
+                    type="heating.apply_skipped_small_delta",
+                    key="heating.apply_skipped_small_delta",
+                    severity="info",
+                    title="Heating apply skipped",
+                    message="Heating target change is below the configured temperature step.",
+                    context={
+                        "branch": selected_branch,
+                        "target_temperature": target_temperature,
+                    },
+                )
+            )
+
+        if reason == "apply_rate_limited" and previous_reason != "apply_rate_limited":
+            self._queue_event(
+                HeimaEvent(
+                    type="heating.apply_rate_limited",
+                    key="heating.apply_rate_limited",
+                    severity="info",
+                    title="Heating apply rate-limited",
+                    message="Heating apply skipped because the minimum apply interval is still active.",
+                    context={
+                        "branch": selected_branch,
+                        "target_temperature": target_temperature,
+                    },
+                )
+            )
+
+        if reason == "vacation_bindings_unavailable" and previous_reason != "vacation_bindings_unavailable":
+            self._queue_event(
+                HeimaEvent(
+                    type="heating.vacation_bindings_unavailable",
+                    key="heating.vacation_bindings_unavailable",
+                    severity="warn",
+                    title="Heating vacation bindings unavailable",
+                    message="Heating vacation branch could not compute a target because required bindings are unavailable.",
+                    context={"branch": selected_branch},
+                )
+            )
+
+    def _schedule_heating_recheck(
+        self,
+        *,
+        selected_branch: str,
+        phase: str,
+        vacation_meta: dict[str, Any],
+        temperature_step: float,
+    ) -> None:
+        if selected_branch != "vacation_curve" or not vacation_meta:
+            return
+
+        delay_s = self._heating_vacation_recheck_delay_s(
+            phase=phase,
+            vacation_meta=vacation_meta,
+            temperature_step=temperature_step,
+        )
+        if delay_s is None:
+            return
+        self._schedule_timed_recheck_deadline(
+            job_id="heating:vacation_curve",
+            deadline=time.monotonic() + delay_s,
+            owner="heating",
+            label="Heating vacation curve recheck",
+        )
+
+    @staticmethod
+    def _heating_vacation_recheck_delay_s(
+        *,
+        phase: str,
+        vacation_meta: dict[str, Any],
+        temperature_step: float,
+    ) -> float | None:
+        candidates: list[float] = []
+        if phase == "ramp_down":
+            remaining_h = float(vacation_meta["ramp_down_h"]) - float(vacation_meta["hours_from_start"])
+            if remaining_h > 0:
+                candidates.append(remaining_h * 3600)
+            exact_change = HeimaEngine._heating_vacation_next_quantized_change_delay_s(
+                phase=phase,
+                vacation_meta=vacation_meta,
+                temperature_step=temperature_step,
+            )
+            if exact_change is not None:
+                candidates.append(exact_change)
+        elif phase == "cruise":
+            remaining_h = float(vacation_meta["hours_to_end"]) - float(vacation_meta["ramp_up_h"])
+            if remaining_h > 0:
+                candidates.append(remaining_h * 3600)
+        elif phase == "ramp_up":
+            remaining_h = float(vacation_meta["hours_to_end"])
+            if remaining_h > 0:
+                candidates.append(remaining_h * 3600)
+            exact_change = HeimaEngine._heating_vacation_next_quantized_change_delay_s(
+                phase=phase,
+                vacation_meta=vacation_meta,
+                temperature_step=temperature_step,
+            )
+            if exact_change is not None:
+                candidates.append(exact_change)
+
+        if not candidates:
+            return None
+        delay_s = min(candidate for candidate in candidates if candidate > 0)
+        return max(1.0, float(delay_s))
+
+    @staticmethod
+    def _heating_vacation_next_quantized_change_delay_s(
+        *,
+        phase: str,
+        vacation_meta: dict[str, Any],
+        temperature_step: float,
+    ) -> float | None:
+        if temperature_step <= 0:
+            return None
+
+        raw_target = float(vacation_meta.get("raw_target", 0.0))
+        quantized_target = float(vacation_meta.get("quantized_target", 0.0))
+        slope_per_hour = 0.0
+
+        if phase == "ramp_down":
+            ramp_down_h = float(vacation_meta.get("ramp_down_h", 0.0))
+            if ramp_down_h <= 0:
+                return None
+            slope_per_hour = (
+                float(vacation_meta.get("min_safety", 0.0)) - float(vacation_meta.get("start_temp", 0.0))
+            ) / ramp_down_h
+        elif phase == "ramp_up":
+            ramp_up_h = float(vacation_meta.get("ramp_up_h", 0.0))
+            if ramp_up_h <= 0:
+                return None
+            slope_per_hour = (
+                float(vacation_meta.get("comfort_temp", 0.0)) - float(vacation_meta.get("min_safety", 0.0))
+            ) / ramp_up_h
+        else:
+            return None
+
+        if slope_per_hour == 0:
+            return None
+
+        half_step = temperature_step / 2.0
+        if slope_per_hour < 0:
+            threshold = quantized_target - half_step
+            if raw_target < threshold:
+                threshold -= temperature_step
+            delta = raw_target - threshold
+        else:
+            threshold = quantized_target + half_step
+            if raw_target > threshold:
+                threshold += temperature_step
+            delta = threshold - raw_target
+
+        if delta <= 0:
+            return 1.0
+        return max(1.0, float(delta / abs(slope_per_hour) * 3600))
+
+    def _finalize_heating_target(
+        self,
+        *,
+        branch_reason: str,
+        target_temperature: float,
+        apply_mode: str,
+        manual_override_active: bool,
+        current_setpoint: float | None,
+        temperature_step: float,
+    ) -> tuple[str, str, bool, bool, bool, bool]:
+        if apply_mode != "set_temperature":
+            return ("delegated", "apply_mode_delegate_to_scheduler", False, False, False, False)
+        if manual_override_active:
+            return ("blocked", "manual_override_blocked", False, True, False, False)
+
+        diff = (
+            None
+            if current_setpoint is None
+            else abs(float(target_temperature) - float(current_setpoint))
+        )
+        if diff is not None and diff < temperature_step:
+            return ("idle", "small_delta_skip", False, True, True, False)
+
+        if self._heating_last_target_temp == target_temperature and self._heating_last_apply_ts is not None:
+            if (time.monotonic() - self._heating_last_apply_ts) < _HEATING_MIN_SECONDS_BETWEEN_APPLIES:
+                return ("idle", "apply_rate_limited", False, True, False, True)
+
+        return ("target_active", branch_reason, True, False, False, False)
+
+    def _resolve_vacation_curve_target(
+        self,
+        *,
+        heating_cfg: dict[str, Any],
+        branch_cfg: dict[str, Any],
+        outdoor_temperature: float | None,
+        temperature_step: float,
+    ) -> tuple[float | None, str, dict[str, Any], str | None]:
+        hours_from = self._coerce_float_from_entity(heating_cfg.get("vacation_hours_from_start_entity"))
+        hours_to = self._coerce_float_from_entity(heating_cfg.get("vacation_hours_to_end_entity"))
+        total_hours = self._coerce_float_from_entity(heating_cfg.get("vacation_total_hours_entity"))
+        explicit_is_long = self._coerce_bool_from_entity(heating_cfg.get("vacation_is_long_entity"))
+        ramp_down = self._coerce_non_negative_float(branch_cfg.get("vacation_ramp_down_h"), default=None)
+        ramp_up = self._coerce_non_negative_float(branch_cfg.get("vacation_ramp_up_h"), default=None)
+        min_total_hours_for_ramp = self._coerce_non_negative_float(
+            branch_cfg.get("vacation_min_total_hours_for_ramp"),
+            default=None,
+        )
+        min_temp = self._coerce_positive_float(branch_cfg.get("vacation_min_temp"), default=None)
+        comfort_temp = self._coerce_positive_float(branch_cfg.get("vacation_comfort_temp"), default=None)
+        start_temp = self._coerce_positive_float(branch_cfg.get("vacation_start_temp"), default=None)
+
+        if None in (
+            hours_from,
+            hours_to,
+            total_hours,
+            ramp_down,
+            ramp_up,
+            min_total_hours_for_ramp,
+            min_temp,
+            comfort_temp,
+            start_temp,
+            outdoor_temperature,
+        ):
+            return (None, "vacation_curve", {}, "vacation_bindings_unavailable")
+
+        is_long = (
+            explicit_is_long
+            if explicit_is_long is not None
+            else bool(total_hours >= min_total_hours_for_ramp)
+        )
+        min_safety = self._heating_vacation_min_safety(
+            min_temp=min_temp,
+            outdoor_temperature=outdoor_temperature,
+        )
+
+        if not is_long:
+            phase = "eco_only"
+            raw_target = min_safety
+        else:
+            eco = min_safety
+            raw_target = eco
+            phase = "cruise"
+            if total_hours <= 0:
+                phase = "cruise"
+            elif ramp_down > 0 and hours_from < ramp_down:
+                raw_target = start_temp + (eco - start_temp) * (hours_from / ramp_down)
+                phase = "ramp_down"
+            elif ramp_up > 0 and hours_to < ramp_up:
+                raw_target = eco + (comfort_temp - eco) * (1 - (hours_to / ramp_up))
+                phase = "ramp_up"
+
+        quantized = round(raw_target / temperature_step) * temperature_step
+        target = round(float(quantized), 2)
+        return (
+            target,
+            phase,
+            {
+                "hours_from_start": hours_from,
+                "hours_to_end": hours_to,
+                "total_hours": total_hours,
+                "is_long": is_long,
+                "ramp_down_h": ramp_down,
+                "ramp_up_h": ramp_up,
+                "min_total_hours_for_ramp": min_total_hours_for_ramp,
+                "min_temp": min_temp,
+                "comfort_temp": comfort_temp,
+                "start_temp": start_temp,
+                "raw_target": round(float(raw_target), 4),
+                "quantized_target": target,
+                "min_safety": min_safety,
+            },
+            None,
+        )
+
+    @staticmethod
+    def _heating_vacation_min_safety(*, min_temp: float, outdoor_temperature: float) -> float:
+        if outdoor_temperature <= 0:
+            return max(min_temp, 17.0)
+        if outdoor_temperature <= 3:
+            return max(min_temp, 16.5)
+        return min_temp
+
+    def _current_climate_setpoint(self, entity_id: str) -> float | None:
+        return self._coerce_positive_float(self._state_attr(entity_id, "temperature"), default=None)
+
+    @staticmethod
+    def _heating_climate_manual_override_detected(preset_mode: str | None) -> bool:
+        if not preset_mode:
+            return False
+        normalized = preset_mode.casefold().replace(" ", "").replace("_", "").replace("-", "")
+        if normalized in {"", "none", "null", "schedule", "scheduled", "auto"}:
+            return False
+        return normalized in {
+            "hold",
+            "manual",
+            "manualhold",
+            "override",
+            "permanenthold",
+            "temporaryhold",
+        }
+
+    def _state_attr(self, entity_id: str | None, attr_name: str) -> Any:
+        if not entity_id:
+            return None
+        state = self._hass.states.get(entity_id)
+        if state is None:
+            return None
+        attrs = getattr(state, "attributes", {}) or {}
+        if not isinstance(attrs, dict):
+            return None
+        return attrs.get(attr_name)
+
+    def _coerce_float_from_entity(self, entity_id: str | None) -> float | None:
+        if not entity_id:
+            return None
+        state = self._hass.states.get(str(entity_id))
+        if state is None:
+            return None
+        try:
+            return float(state.state)
+        except (TypeError, ValueError):
+            return None
+
+    def _coerce_bool_from_entity(self, entity_id: str | None) -> bool | None:
+        if not entity_id:
+            return None
+        if self._hass.states.get(str(entity_id)) is None:
+            return None
+        obs = self._normalizer.boolean_signal(str(entity_id))
+        if obs.state == "unknown":
+            return None
+        return obs.state == "on"
+
+    @staticmethod
+    def _coerce_text(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @staticmethod
+    def _coerce_positive_float(value: Any, *, default: float | None) -> float | None:
+        if value in (None, ""):
+            return default
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        if parsed <= 0:
+            return default
+        return parsed
+
+    @staticmethod
+    def _coerce_non_negative_float(value: Any, *, default: float | None) -> float | None:
+        if value in (None, ""):
+            return default
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        if parsed < 0:
+            return default
+        return parsed
 
     def _compute_lighting_intents(self, house_state: str, occupied_rooms: list[str]) -> dict[str, str]:
         options = dict(self._entry.options)
@@ -632,6 +1366,25 @@ class HeimaEngine:
                     reason=f"intent:{intent}",
                 )
 
+        heating_trace = dict(self._heating_trace)
+        if heating_trace.get("configured") and heating_trace.get("apply_allowed"):
+            climate_entity = str(heating_trace.get("climate_entity", "")).strip()
+            target_temperature = heating_trace.get("target_temperature")
+            if climate_entity and isinstance(target_temperature, (int, float)):
+                steps.append(
+                    ApplyStep(
+                        domain="heating",
+                        target=climate_entity,
+                        action="climate.set_temperature",
+                        params={
+                            "entity_id": climate_entity,
+                            "hvac_mode": "heat",
+                            "temperature": float(target_temperature),
+                        },
+                        reason=f"branch:{heating_trace.get('selected_branch', 'disabled')}",
+                    )
+                )
+
         self._lighting_room_trace = room_trace
         self._lighting_conflicts_last_eval = conflicts
         return ApplyPlan(steps=steps)
@@ -684,6 +1437,38 @@ class HeimaEngine:
                     continue
                 except Exception:
                     _LOGGER.exception("Lighting apply failed for room area '%s'", area_id)
+                    continue
+
+            if step.action == "climate.set_temperature":
+                climate_entity = step.params.get("entity_id")
+                if not isinstance(climate_entity, str) or not climate_entity.startswith("climate."):
+                    continue
+
+                if self._hass.states.get(climate_entity) is None:
+                    _LOGGER.warning("Skipping missing climate entity: %s", climate_entity)
+                    continue
+                try:
+                    await self._hass.services.async_call(
+                        "climate",
+                        "set_temperature",
+                        dict(step.params),
+                        blocking=False,
+                    )
+                    self._heating_last_target_temp = (
+                        float(step.params["temperature"])
+                        if isinstance(step.params.get("temperature"), (int, float))
+                        else self._heating_last_target_temp
+                    )
+                    self._heating_last_apply_ts = time.monotonic()
+                    self._state.set_sensor("heima_heating_last_applied_target", self._heating_last_target_temp)
+                    continue
+                except ServiceNotFound:
+                    _LOGGER.warning(
+                        "Skipping heating apply during startup/race: service climate.set_temperature not available"
+                    )
+                    continue
+                except Exception:
+                    _LOGGER.exception("Heating apply failed for climate '%s'", climate_entity)
                     continue
 
     def _should_apply_scene(self, room_id: str, scene_entity: str) -> bool:
@@ -908,8 +1693,34 @@ class HeimaEngine:
             for room_id in occupied_rooms
         )
         has_anonymous_evidence = bool(self._state.get_binary("heima_anonymous_presence"))
+        corroboration_inputs = [
+            self._normalizer.boolean_value(
+                has_room_evidence,
+                source_key="security:derived_room_evidence",
+                reason="derived_room_occupied" if has_room_evidence else "no_derived_room_occupied",
+            ),
+            self._normalizer.boolean_value(
+                has_anonymous_evidence,
+                source_key="security:anonymous_presence_evidence",
+                reason="anonymous_presence_on" if has_anonymous_evidence else "anonymous_presence_off",
+            ),
+        ]
+        corroboration = self._normalizer.derive(
+            kind="boolean_signal",
+            inputs=corroboration_inputs,
+            strategy_cfg=build_signal_set_strategy_cfg_for_contract(
+                contract=SECURITY_CORROBORATION_STRATEGY_CONTRACT,
+            ),
+            context={"source": "security_corroboration"},
+        )
+        self._security_corroboration_trace = {
+            "source_observations": [obs.as_dict() for obs in corroboration_inputs],
+            "fused_observation": corroboration.as_dict(),
+            "plugin_id": corroboration.plugin_id,
+            "used_plugin_fallback": corroboration.reason == "plugin_error_fallback",
+        }
         if policy == "smart":
-            mismatch_active = mismatch_active and (has_room_evidence or has_anonymous_evidence)
+            mismatch_active = mismatch_active and corroboration.state == "on"
 
         if self._persistent_security_mismatch_ready(active=mismatch_active, persist_s=persist_s):
             self._queue_event(
@@ -1006,7 +1817,12 @@ class HeimaEngine:
             if persist_s <= 0 or (now - self._occupancy_home_no_room_since) >= persist_s:
                 self._occupancy_home_no_room_emitted = True
                 return True
-            self._schedule_timed_recheck_deadline(self._occupancy_home_no_room_since + persist_s)
+            self._schedule_timed_recheck_deadline(
+                job_id="occupancy:home_no_room",
+                deadline=self._occupancy_home_no_room_since + persist_s,
+                owner="occupancy",
+                label="Occupancy home-no-room persistence",
+            )
             return False
 
         if key.startswith("room_no_home:"):
@@ -1022,7 +1838,12 @@ class HeimaEngine:
             if persist_s <= 0 or (now - self._occupancy_room_no_home_since[room_id]) >= persist_s:
                 self._occupancy_room_no_home_emitted.add(room_id)
                 return True
-            self._schedule_timed_recheck_deadline(self._occupancy_room_no_home_since[room_id] + persist_s)
+            self._schedule_timed_recheck_deadline(
+                job_id=f"occupancy:room_no_home:{room_id}",
+                deadline=self._occupancy_room_no_home_since[room_id] + persist_s,
+                owner="occupancy",
+                label=f"Occupancy room-no-home persistence ({room_id})",
+            )
             return False
 
         return False
@@ -1045,7 +1866,12 @@ class HeimaEngine:
         if persist_s <= 0 or (now - self._security_armed_away_but_home_since) >= persist_s:
             self._security_armed_away_but_home_emitted = True
             return True
-        self._schedule_timed_recheck_deadline(self._security_armed_away_but_home_since + persist_s)
+        self._schedule_timed_recheck_deadline(
+            job_id="security:armed_away_but_home",
+            deadline=self._security_armed_away_but_home_since + persist_s,
+            owner="security",
+            label="Security armed-away-but-home persistence",
+        )
         return False
 
     def _event_category(self, event_type: str) -> str:
@@ -1152,8 +1978,16 @@ class HeimaEngine:
             required = int(person_cfg.get("required", 1))
             slug = str(person_cfg.get("slug", ""))
             trace_key = f"person:{slug}" if slug else "person:unknown"
-            is_home, active_count = self._compute_group_presence(sources, required, trace_key=trace_key)
-            confidence = int((active_count / max(1, len(sources))) * 100) if sources else 0
+            fused, active_count = self._compute_group_presence(
+                sources,
+                required,
+                strategy=str(person_cfg.get("group_strategy", "quorum") or "quorum"),
+                weight_threshold=person_cfg.get("weight_threshold"),
+                source_weights=person_cfg.get("source_weights"),
+                trace_key=trace_key,
+            )
+            is_home = fused.state == "on"
+            confidence = int(fused.confidence)
             return is_home, "quorum", confidence
 
         slug = str(person_cfg.get("slug", ""))
@@ -1169,18 +2003,26 @@ class HeimaEngine:
         sources: list[str],
         required: int,
         *,
+        strategy: str = "quorum",
+        weight_threshold: Any = None,
+        source_weights: Any = None,
         trace_key: str | None = None,
-    ) -> tuple[bool, int]:
+    ) -> tuple[DerivedObservation, int]:
         observations = [self._normalizer.presence(entity_id) for entity_id in sources]
         active_count = sum(1 for obs in observations if obs.state == "on")
+        group_strategy = str(strategy or "quorum")
+        strategy_cfg = build_signal_set_strategy_cfg_for_contract(
+            contract=GROUP_PRESENCE_STRATEGY_CONTRACT,
+            strategy=group_strategy,
+            required=int(required),
+            weight_threshold=weight_threshold,
+            source_weights=source_weights,
+            fallback_state="off",
+        )
         fused = self._normalizer.derive(
             kind="presence",
             inputs=observations,
-            strategy_cfg={
-                "plugin_id": "builtin.quorum",
-                "required": int(required),
-                "fallback_state": "off",
-            },
+            strategy_cfg=strategy_cfg,
             context={"source": "group_presence"},
         )
         if trace_key:
@@ -1188,11 +2030,38 @@ class HeimaEngine:
                 "source_observations": [obs.as_dict() for obs in observations],
                 "fused_observation": fused.as_dict(),
                 "plugin_id": fused.plugin_id,
+                "group_strategy": group_strategy,
                 "required": int(required),
+                "weight_threshold": (
+                    float(weight_threshold)
+                    if group_strategy == "weighted_quorum" and weight_threshold not in (None, "")
+                    else None
+                ),
+                "configured_source_weights": (
+                    dict(source_weights) if group_strategy == "weighted_quorum" and isinstance(source_weights, dict) else {}
+                ),
                 "active_count": active_count,
                 "used_plugin_fallback": fused.reason == "plugin_error_fallback",
             }
-        return fused.state == "on", active_count
+        return fused, active_count
+
+    def _compute_house_signal(self, trace_key: str, entity_ids: list[str]) -> bool:
+        observations = [self._normalizer.boolean_signal(entity_id) for entity_id in entity_ids]
+        fused = self._normalizer.derive(
+            kind="boolean_signal",
+            inputs=observations,
+            strategy_cfg=build_signal_set_strategy_cfg_for_contract(
+                contract=HOUSE_SIGNAL_STRATEGY_CONTRACT,
+            ),
+            context={"source": "house_signal", "signal": trace_key},
+        )
+        self._house_signals_trace[trace_key] = {
+            "source_observations": [obs.as_dict() for obs in observations],
+            "fused_observation": fused.as_dict(),
+            "plugin_id": fused.plugin_id,
+            "used_plugin_fallback": fused.reason == "plugin_error_fallback",
+        }
+        return fused.state == "on"
 
     def _compute_room_occupancy(self, room_cfg: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         room_id = str(room_cfg.get("room_id", ""))
@@ -1233,24 +2102,14 @@ class HeimaEngine:
             }
 
         logic = str(room_cfg.get("logic", "any_of"))
-        if logic == "all_of":
-            plugin_id = "builtin.all_of"
-        elif logic == "weighted_quorum":
-            plugin_id = "builtin.weighted_quorum"
-        else:
-            plugin_id = "builtin.any_of"
-
         observations = [self._normalizer.presence(entity_id) for entity_id in sources]
-        strategy_cfg: dict[str, Any] = {"plugin_id": plugin_id}
-        strategy_cfg["fallback_state"] = "off"
-        if logic == "weighted_quorum" and room_cfg.get("weight_threshold") not in (None, ""):
-            strategy_cfg["threshold"] = float(room_cfg["weight_threshold"])
-        if logic == "weighted_quorum" and isinstance(room_cfg.get("source_weights"), dict):
-            strategy_cfg["weights"] = {
-                str(entity_id): float(weight)
-                for entity_id, weight in room_cfg["source_weights"].items()
-                if str(entity_id)
-            }
+        strategy_cfg = build_signal_set_strategy_cfg_for_contract(
+            contract=ROOM_OCCUPANCY_STRATEGY_CONTRACT,
+            strategy=logic,
+            weight_threshold=room_cfg.get("weight_threshold"),
+            source_weights=room_cfg.get("source_weights"),
+            fallback_state="off",
+        )
         fused = self._normalizer.derive(
             kind="presence",
             inputs=observations,
@@ -1285,7 +2144,12 @@ class HeimaEngine:
                 self._occupancy_room_effective_since[room_id] = now
             elif dwell > 0:
                 deadline = candidate_since + dwell
-                self._schedule_timed_recheck_deadline(deadline)
+                self._schedule_timed_recheck_deadline(
+                    job_id=f"occupancy:dwell:{room_id}",
+                    deadline=deadline,
+                    owner="occupancy",
+                    label=f"Occupancy dwell transition ({room_id})",
+                )
 
         forced_off_by_max_on = False
         effective_since = self._occupancy_room_effective_since.get(room_id, now)
@@ -1304,6 +2168,13 @@ class HeimaEngine:
                         message=f"Room '{room_id}' occupancy forced off after max_on_s timeout.",
                         context={"room": room_id, "max_on_s": max_on_s},
                     )
+                )
+            else:
+                self._schedule_timed_recheck_deadline(
+                    job_id=f"occupancy:max_on:{room_id}",
+                    deadline=effective_since + max_on_s,
+                    owner="occupancy",
+                    label=f"Occupancy max_on timeout ({room_id})",
                 )
         effective_since = self._occupancy_room_effective_since.get(room_id, now)
 
@@ -1396,15 +2267,26 @@ class HeimaEngine:
                 "last_apply_ts_by_room": dict(self._lighting_last_ts),
                 "hold_seen_state_by_room": dict(self._lighting_hold_seen_state),
             },
+            "heating": dict(self._heating_trace),
             "events": self._events.stats.as_dict(),
             "presence": {
                 "group_trace": dict(self._group_presence_trace),
+            },
+            "house_signals": {
+                "trace": dict(self._house_signals_trace),
             },
             "occupancy": {
                 "room_trace": dict(self._occupancy_room_trace),
             },
             "security": {
                 "observation_trace": dict(self._security_observation_trace),
+                "corroboration_trace": dict(self._security_corroboration_trace),
+            },
+            "house_state_override": {
+                "house_state_override": self._house_state_override,
+                "house_state_override_active": self._house_state_override is not None,
+                "house_state_override_set_by": self._house_state_override_set_by,
+                "house_state_override_last_change_ts": self._house_state_override_last_change_ts,
             },
             "normalization": self._normalizer.diagnostics(),
         }

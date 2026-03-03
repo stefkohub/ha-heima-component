@@ -27,6 +27,7 @@ async def async_get_config_entry_diagnostics(
         "runtime": {
             "data": getattr(coordinator, "data", None),
             "engine": coordinator.engine.diagnostics() if coordinator else {},
+            "scheduler": coordinator.scheduler.diagnostics() if coordinator else {},
         },
     }
 

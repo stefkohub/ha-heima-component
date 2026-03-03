@@ -127,3 +127,53 @@ async def test_rooms_flow_persists_weighted_quorum_room_source_weights():
         "binary_sensor.motion": 0.4,
         "binary_sensor.mmwave": 0.8,
     }
+
+
+@pytest.mark.asyncio
+async def test_heating_flow_persists_general_config_and_branch_mapping():
+    flow = _flow()
+
+    result = await flow.async_step_heating(
+        {
+            "climate_entity": "climate.termostato",
+            "apply_mode": "delegate_to_scheduler",
+            "temperature_step": 0.5,
+            "manual_override_guard": True,
+            "outdoor_temperature_entity": "sensor.outdoor_temp",
+            "vacation_hours_from_start_entity": "sensor.hours_from",
+            "vacation_hours_to_end_entity": "sensor.hours_to",
+            "vacation_total_hours_entity": "sensor.hours_total",
+            "vacation_is_long_entity": "binary_sensor.vacation_is_long",
+        }
+    )
+    assert result["type"] == "menu"
+    assert result["step_id"] == "heating_branches_menu"
+
+    selected = await flow.async_step_heating_branches_edit({"house_state": "vacation"})
+    assert selected["type"] == "form"
+    assert selected["step_id"] == "heating_branch_edit_form"
+
+    updated = await flow.async_step_heating_branch_edit_form(
+        {
+            "house_state": "vacation",
+            "branch": "vacation_curve",
+            "vacation_ramp_down_h": 8,
+            "vacation_ramp_up_h": 10,
+            "vacation_min_temp": 16.5,
+            "vacation_comfort_temp": 19.5,
+            "vacation_start_temp": 19.5,
+            "vacation_min_total_hours_for_ramp": 24,
+        }
+    )
+    assert updated["type"] == "menu"
+    assert updated["step_id"] == "heating_branches_menu"
+
+    saved = await flow.async_step_heating_branches_save()
+    assert saved["type"] == "form"
+    assert saved["step_id"] == "security"
+
+    heating = flow.options["heating"]
+    assert heating["climate_entity"] == "climate.termostato"
+    assert heating["temperature_step"] == 0.5
+    assert heating["override_branches"]["vacation"]["branch"] == "vacation_curve"
+    assert heating["override_branches"]["vacation"]["vacation_min_temp"] == 16.5

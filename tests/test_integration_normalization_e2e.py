@@ -6,8 +6,10 @@ import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.heima.const import DOMAIN
+from custom_components.heima.const import DOMAIN, SERVICE_SET_MODE
 from custom_components.heima.runtime.normalization import InputNormalizer, NormalizationFusionRegistry
+from custom_components.heima.runtime.engine import HeimaEngine
+from custom_components.heima.services import async_register_services
 
 
 def _entry(options: dict) -> MockConfigEntry:
@@ -195,6 +197,57 @@ async def test_e2e_person_quorum_updates_home_sensor_and_group_trace(
 
 
 @pytest.mark.asyncio
+async def test_e2e_person_weighted_quorum_uses_weights_and_group_trace(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    entry = _entry(
+        {
+            "people_named": [
+                {
+                    "slug": "stefano",
+                    "display_name": "Stefano",
+                    "presence_method": "quorum",
+                    "sources": [
+                        "binary_sensor.phone_wifi",
+                        "binary_sensor.watch_ble",
+                    ],
+                    "group_strategy": "weighted_quorum",
+                    "weight_threshold": 1.2,
+                    "source_weights": {
+                        "binary_sensor.phone_wifi": 0.4,
+                        "binary_sensor.watch_ble": 0.8,
+                    },
+                    "required": 1,
+                    "enable_override": False,
+                }
+            ]
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("binary_sensor.phone_wifi", "on")
+    hass.states.async_set("binary_sensor.watch_ble", "off")
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.heima_person_stefano_home").state == "off"
+
+    hass.states.async_set("binary_sensor.watch_ble", "on")
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.heima_person_stefano_home").state == "on"
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    trace = coordinator.engine.diagnostics()["presence"]["group_trace"]["person:stefano"]
+    assert trace["plugin_id"] == "builtin.weighted_quorum"
+    assert trace["group_strategy"] == "weighted_quorum"
+    assert trace["weight_threshold"] == 1.2
+    assert trace["configured_source_weights"]["binary_sensor.watch_ble"] == 0.8
+
+
+@pytest.mark.asyncio
 async def test_e2e_anonymous_presence_updates_sensor_and_group_trace(
     hass: HomeAssistant,
     enable_custom_integrations,
@@ -245,6 +298,53 @@ async def test_e2e_anonymous_presence_updates_sensor_and_group_trace(
 
 
 @pytest.mark.asyncio
+async def test_e2e_anonymous_weighted_quorum_uses_weights_and_group_trace(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    entry = _entry(
+        {
+            "people_anonymous": {
+                "enabled": True,
+                "sources": [
+                    "binary_sensor.motion_hall",
+                    "binary_sensor.motion_living",
+                ],
+                "group_strategy": "weighted_quorum",
+                "weight_threshold": 1.2,
+                "source_weights": {
+                    "binary_sensor.motion_hall": 0.4,
+                    "binary_sensor.motion_living": 0.8,
+                },
+                "required": 1,
+                "anonymous_count_weight": 2,
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("binary_sensor.motion_hall", "on")
+    hass.states.async_set("binary_sensor.motion_living", "off")
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.heima_anonymous_presence").state == "off"
+
+    hass.states.async_set("binary_sensor.motion_living", "on")
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.heima_anonymous_presence").state == "on"
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    trace = coordinator.engine.diagnostics()["presence"]["group_trace"]["anonymous"]
+    assert trace["plugin_id"] == "builtin.weighted_quorum"
+    assert trace["group_strategy"] == "weighted_quorum"
+    assert trace["weight_threshold"] == 1.2
+    assert trace["configured_source_weights"]["binary_sensor.motion_living"] == 0.8
+
+
+@pytest.mark.asyncio
 async def test_e2e_room_occupancy_plugin_failure_uses_fail_safe_off_fallback(
     hass: HomeAssistant,
     enable_custom_integrations,
@@ -286,3 +386,464 @@ async def test_e2e_room_occupancy_plugin_failure_uses_fail_safe_off_fallback(
     assert trace["fused_observation"]["state"] == "off"
     assert trace["fused_observation"]["reason"] == "plugin_error_fallback"
     assert trace["fused_observation"]["evidence"]["fallback"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_e2e_security_smart_uses_boolean_plugin_corroboration_trace(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    entry = _entry(
+        {
+            "people_named": [
+                {
+                    "slug": "stefano",
+                    "presence_method": "manual",
+                    "enable_override": True,
+                }
+            ],
+            "rooms": [
+                {
+                    "room_id": "studio",
+                    "occupancy_mode": "derived",
+                    "sources": ["binary_sensor.room_presence"],
+                    "logic": "any_of",
+                    "on_dwell_s": 0,
+                    "off_dwell_s": 0,
+                }
+            ],
+            "security": {
+                "enabled": True,
+                "security_state_entity": "alarm_control_panel.home",
+                "armed_away_value": "armed_away",
+                "armed_home_value": "armed_home",
+            },
+            "notifications": {
+                "enabled_event_categories": ["security", "people"],
+                "security_mismatch_policy": "smart",
+                "security_mismatch_persist_s": 0,
+            },
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("alarm_control_panel.home", "armed_away")
+    hass.states.async_set("binary_sensor.room_presence", "on")
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    coordinator.engine.state.set_select("heima_person_stefano_override", "force_home")
+    await coordinator.async_request_evaluation(reason="test:security_corroboration")
+    await hass.async_block_till_done()
+
+    trace = coordinator.engine.diagnostics()["security"]["corroboration_trace"]
+    assert trace["plugin_id"] == "builtin.any_of"
+    assert trace["used_plugin_fallback"] is False
+    assert trace["fused_observation"]["state"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_e2e_house_signal_helpers_use_boolean_plugin_trace(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    entry = _entry({})
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("binary_sensor.relax_mode", "on")
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    trace = coordinator.engine.diagnostics()["house_signals"]["trace"]["relax_mode"]
+    assert trace["plugin_id"] == "builtin.any_of"
+    assert trace["used_plugin_fallback"] is False
+    assert trace["fused_observation"]["state"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_e2e_set_mode_forces_and_clears_final_house_state_override(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    entry = _entry({})
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    await async_register_services(hass)
+
+    assert hass.states.get("sensor.heima_house_state").state == "away"
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_MODE,
+        {"mode": "vacation", "state": True},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.heima_house_state").state == "vacation"
+    assert hass.states.get("sensor.heima_house_state_reason").state == "manual_override:vacation"
+    assert hass.states.get("sensor.heima_last_event").state == "system.house_state_override_changed"
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    override_diag = coordinator.engine.diagnostics()["house_state_override"]
+    assert override_diag["house_state_override"] == "vacation"
+    assert override_diag["house_state_override_active"] is True
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_MODE,
+        {"mode": "vacation", "state": False},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.heima_house_state").state == "away"
+    assert coordinator.engine.diagnostics()["house_state_override"]["house_state_override"] is None
+
+
+@pytest.mark.asyncio
+async def test_e2e_heating_fixed_target_branch_updates_canonical_entities_and_calls_climate(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    calls: list[dict[str, object]] = []
+
+    async def _capture_climate_call(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("climate", "set_temperature", _capture_climate_call)
+
+    entry = _entry(
+        {
+            "heating": {
+                "climate_entity": "climate.test_thermostat",
+                "apply_mode": "set_temperature",
+                "temperature_step": 0.5,
+                "manual_override_guard": True,
+                "override_branches": {
+                    "away": {
+                        "branch": "fixed_target",
+                        "target_temperature": 20.0,
+                    }
+                },
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("climate.test_thermostat", "heat", {"temperature": 18.0})
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.heima_heating_state") is not None
+    assert hass.states.get("sensor.heima_heating_state").state == "target_active"
+    assert hass.states.get("sensor.heima_heating_reason").state == "fixed_target_branch"
+    assert hass.states.get("sensor.heima_heating_phase").state == "fixed_target"
+    assert hass.states.get("sensor.heima_heating_branch").state == "fixed_target"
+    assert float(hass.states.get("sensor.heima_heating_target_temp").state) == 20.0
+    assert float(hass.states.get("sensor.heima_heating_current_setpoint").state) == 18.0
+
+    assert calls == [
+        {
+            "entity_id": "climate.test_thermostat",
+            "hvac_mode": "heat",
+            "temperature": 20.0,
+        }
+    ]
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    trace = coordinator.engine.diagnostics()["heating"]
+    assert trace["selected_branch"] == "fixed_target"
+    assert trace["apply_allowed"] is True
+    assert float(hass.states.get("sensor.heima_heating_last_applied_target").state) == 20.0
+
+
+@pytest.mark.asyncio
+async def test_e2e_heating_vacation_curve_branch_computes_and_applies_target(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    calls: list[dict[str, object]] = []
+
+    async def _capture_climate_call(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("climate", "set_temperature", _capture_climate_call)
+
+    entry = _entry(
+        {
+            "heating": {
+                "climate_entity": "climate.test_thermostat",
+                "apply_mode": "set_temperature",
+                "temperature_step": 0.5,
+                "manual_override_guard": True,
+                "outdoor_temperature_entity": "sensor.outdoor_temp",
+                "vacation_hours_from_start_entity": "sensor.vacation_from",
+                "vacation_hours_to_end_entity": "sensor.vacation_to",
+                "vacation_total_hours_entity": "sensor.vacation_total",
+                "vacation_is_long_entity": "binary_sensor.vacation_long",
+                "override_branches": {
+                    "vacation": {
+                        "branch": "vacation_curve",
+                        "vacation_ramp_down_h": 8.0,
+                        "vacation_ramp_up_h": 10.0,
+                        "vacation_min_temp": 16.5,
+                        "vacation_comfort_temp": 19.5,
+                        "vacation_start_temp": 19.5,
+                        "vacation_min_total_hours_for_ramp": 24.0,
+                    }
+                },
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("input_boolean.vacation_mode", "on")
+    hass.states.async_set("climate.test_thermostat", "heat", {"temperature": 18.0})
+    hass.states.async_set("sensor.outdoor_temp", "5.0")
+    hass.states.async_set("sensor.vacation_from", "2.0")
+    hass.states.async_set("sensor.vacation_to", "30.0")
+    hass.states.async_set("sensor.vacation_total", "32.0")
+    hass.states.async_set("binary_sensor.vacation_long", "on")
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.heima_house_state").state == "vacation"
+    assert hass.states.get("sensor.heima_heating_state").state == "target_active"
+    assert hass.states.get("sensor.heima_heating_reason").state == "vacation_curve_branch"
+    assert hass.states.get("sensor.heima_heating_phase").state == "ramp_down"
+    assert hass.states.get("sensor.heima_heating_branch").state == "vacation_curve"
+    assert float(hass.states.get("sensor.heima_heating_target_temp").state) == 19.0
+
+    assert calls == [
+        {
+            "entity_id": "climate.test_thermostat",
+            "hvac_mode": "heat",
+            "temperature": 19.0,
+        }
+    ]
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    trace = coordinator.engine.diagnostics()["heating"]
+    assert trace["selected_branch"] == "vacation_curve"
+    assert trace["vacation"]["is_long"] is True
+    assert trace["vacation"]["quantized_target"] == 19.0
+
+
+@pytest.mark.asyncio
+async def test_e2e_heating_fixed_target_small_delta_skips_apply_and_sets_guard(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    calls: list[dict[str, object]] = []
+
+    async def _capture_climate_call(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("climate", "set_temperature", _capture_climate_call)
+
+    entry = _entry(
+        {
+            "heating": {
+                "climate_entity": "climate.test_thermostat",
+                "apply_mode": "set_temperature",
+                "temperature_step": 0.5,
+                "manual_override_guard": True,
+                "override_branches": {
+                    "away": {
+                        "branch": "fixed_target",
+                        "target_temperature": 20.0,
+                    }
+                },
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("climate.test_thermostat", "heat", {"temperature": 19.8})
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.heima_heating_state").state == "idle"
+    assert hass.states.get("sensor.heima_heating_reason").state == "small_delta_skip"
+    assert hass.states.get("binary_sensor.heima_heating_applying_guard").state == "on"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_e2e_heating_manual_hold_blocks_fixed_target_apply(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    calls: list[dict[str, object]] = []
+
+    async def _capture_climate_call(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("climate", "set_temperature", _capture_climate_call)
+
+    entry = _entry(
+        {
+            "heating": {
+                "climate_entity": "climate.test_thermostat",
+                "apply_mode": "set_temperature",
+                "temperature_step": 0.5,
+                "manual_override_guard": True,
+                "override_branches": {
+                    "away": {
+                        "branch": "fixed_target",
+                        "target_temperature": 20.0,
+                    }
+                },
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("climate.test_thermostat", "heat", {"temperature": 18.0})
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    coordinator.engine.state.set_binary("heima_heating_manual_hold", True)
+    await coordinator.async_request_evaluation(reason="test:heating_manual_hold")
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.heima_heating_state").state == "blocked"
+    assert hass.states.get("sensor.heima_heating_reason").state == "manual_override_blocked"
+    assert hass.states.get("binary_sensor.heima_heating_applying_guard").state == "on"
+    assert len(calls) == 1
+    # Check the canonical event sensor as the stable integration-level observable.
+    assert hass.states.get("sensor.heima_last_event").state == "heating.manual_override_blocked"
+
+
+@pytest.mark.asyncio
+async def test_e2e_heating_climate_preset_blocks_fixed_target_apply(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    calls: list[dict[str, object]] = []
+
+    async def _capture_climate_call(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("climate", "set_temperature", _capture_climate_call)
+
+    entry = _entry(
+        {
+            "heating": {
+                "climate_entity": "climate.test_thermostat",
+                "apply_mode": "set_temperature",
+                "temperature_step": 0.5,
+                "manual_override_guard": True,
+                "override_branches": {
+                    "away": {
+                        "branch": "fixed_target",
+                        "target_temperature": 20.0,
+                    }
+                },
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set(
+        "climate.test_thermostat",
+        "heat",
+        {"temperature": 18.0, "preset_mode": "PermanentHold"},
+    )
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.heima_heating_state").state == "blocked"
+    assert hass.states.get("sensor.heima_heating_reason").state == "manual_override_blocked"
+    assert hass.states.get("binary_sensor.heima_heating_applying_guard").state == "on"
+    assert calls == []
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    trace = coordinator.engine.diagnostics()["heating"]
+    assert trace["climate_preset_mode"] == "PermanentHold"
+    assert trace["manual_override_source"] == "climate_preset"
+
+
+@pytest.mark.asyncio
+async def test_e2e_heating_vacation_curve_registers_and_fires_scheduler_recheck(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+    monkeypatch,
+):
+    original_delay_fn = HeimaEngine._heating_vacation_recheck_delay_s
+    monkeypatch.setattr(
+        HeimaEngine,
+        "_heating_vacation_recheck_delay_s",
+        staticmethod(lambda **kwargs: 0.2),
+    )
+
+    entry = _entry(
+        {
+            "heating": {
+                "climate_entity": "climate.test_thermostat",
+                "apply_mode": "set_temperature",
+                "temperature_step": 0.5,
+                "manual_override_guard": True,
+                "outdoor_temperature_entity": "sensor.outdoor_temp",
+                "vacation_hours_from_start_entity": "sensor.vacation_from",
+                "vacation_hours_to_end_entity": "sensor.vacation_to",
+                "vacation_total_hours_entity": "sensor.vacation_total",
+                "vacation_is_long_entity": "binary_sensor.vacation_long",
+                "override_branches": {
+                    "vacation": {
+                        "branch": "vacation_curve",
+                        "vacation_ramp_down_h": 8.0,
+                        "vacation_ramp_up_h": 10.0,
+                        "vacation_min_temp": 16.5,
+                        "vacation_comfort_temp": 19.5,
+                        "vacation_start_temp": 19.5,
+                        "vacation_min_total_hours_for_ramp": 24.0,
+                    }
+                },
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("input_boolean.vacation_mode", "on")
+    hass.states.async_set("climate.test_thermostat", "heat", {"temperature": 18.0})
+    hass.states.async_set("sensor.outdoor_temp", "5.0")
+    hass.states.async_set("sensor.vacation_from", "2.0")
+    hass.states.async_set("sensor.vacation_to", "30.0")
+    hass.states.async_set("sensor.vacation_total", "32.0")
+    hass.states.async_set("binary_sensor.vacation_long", "on")
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    pending = coordinator.scheduler.diagnostics()["pending_jobs"]
+    assert any(job["job_id"] == "heating:vacation_curve" for job in pending)
+
+    await asyncio.sleep(0.3)
+    await hass.async_block_till_done()
+
+    assert coordinator.data.last_decision == "evaluation_requested:scheduler:heating:vacation_curve"
+    repending = coordinator.scheduler.diagnostics()["pending_jobs"]
+    assert any(job["job_id"] == "heating:vacation_curve" for job in repending)
