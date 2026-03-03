@@ -24,7 +24,7 @@ Heima e una integrazione custom per Home Assistant che fornisce un motore di pol
 ## Stato Milestone (aggiornato)
 - Milestone 0: raggiunta.
 - Milestone 1: sostanzialmente raggiunta per il perimetro MVP portabile (people, anonymous, occupancy, house_state, lighting, notification pipeline base, diagnostica principale).
-- Milestone 2: non ancora implementata; Heating e ancora in fase di design/spec e non ha un runtime applicativo reale.
+- Milestone 2: sostanzialmente raggiunta come Heating MVP sicuro (branch per `house_state`, safe apply, vacation curve, scheduler condiviso, osservabilita, test). Restano rifiniture e validazione manuale finale.
 - Milestone 1.1: non ancora implementata; il Behavior Framework resta pianificato.
 - Cross-cut Normalization Layer: rollout avanzato e gia integrato nei path runtime principali; il framework e ormai oltre lo stato sperimentale.
 - Cross-cut Policy Plugin Framework: definito a livello spec, non ancora implementato nel runtime.
@@ -106,7 +106,11 @@ Output:
     - room occupancy
     - security corroboration
     - house signals
-  - heating ancora stub (solo entita/config)
+  - Heating MVP implementato:
+    - branch built-in per `house_state`
+    - `fixed_target`
+    - `vacation_curve`
+    - `heima.set_mode` come final house-state override
 
 ### 4. Orchestratore e Apply
 - Orchestratore unico per apply.
@@ -117,6 +121,7 @@ Output:
   - apply lighting integrato nel runtime engine (scene + fallback `light.turn_off(area)`)
   - idempotenza/rate-limit per room implementati
   - diagnostica conflitti room-in-piu-zone presente
+  - apply Heating integrato nel runtime engine (`climate.set_temperature`) con guard e rate-limit
   - orchestratore separato non ancora estratto
 
 ### 5. Notification Pipeline
@@ -133,6 +138,10 @@ Output:
 - Eventi: heima_event, heima_snapshot (opzionale), heima_health (opzionale).
 - Servizi: heima.command, heima.set_mode, heima.set_override.
 - Validazione comandi e errori chiari.
+- Stato attuale:
+  - `heima.command` operativo per i comandi implementati
+  - `heima.set_mode` operativo come override finale runtime-only del `house_state`
+  - `heima.set_override` operativo per gli override gia supportati
 
 ### 7. Diagnostica e Privacy
 - Diagnostica include mapping, last applied, eventi recenti.
@@ -145,6 +154,8 @@ Output:
     - `security.observation_trace`
     - `security.corroboration_trace`
     - `house_signals.trace`
+    - `house_state_override`
+    - `runtime.scheduler`
 
 ### 8. Localizzazione
 - Traduzioni base en/it per labels e errori.
@@ -190,6 +201,23 @@ Output:
   - unit test policy curve
   - runtime test branch/apply guard
   - HA e2e test con `ConfigEntry`
+- Stato attuale:
+  - implementato come Heating MVP
+  - `scheduler_delegate`, `fixed_target`, `vacation_curve`
+  - safe apply con:
+    - manual hold
+    - thermostat preset manual-override detection
+    - small-delta skip
+    - rate limit / idempotenza
+  - scheduler condiviso usato per timed rechecks del `vacation_curve`
+  - eventi:
+    - `heating.vacation_phase_changed`
+    - `heating.target_changed`
+    - `heating.branch_changed`
+    - `heating.apply_skipped_small_delta`
+    - `heating.manual_override_blocked`
+    - `heating.apply_rate_limited`
+    - `heating.vacation_bindings_unavailable`
 
 ### 10. Policy Plugin Framework (future track)
 - P0 Spec Foundation
@@ -232,7 +260,8 @@ Output:
     - security corroboration trace
     - house helper signal trace
   - coperti regression bug principali (selector clear, lighting conflicts, notify pipeline)
-  - suite locale: `99 passed`
+  - aggiunti test HA e2e per Heating e scheduler runtime
+  - suite locale: `120 passed`
 
 ## Rischi e Mitigazioni
 - Config incoerente: validazioni strette + eventi system.config_invalid.
@@ -241,13 +270,9 @@ Output:
 
 ## Prossimi Passi Operativi
 1. Completare `Phase 3`: espandere Event Catalog e standardizzare payload/eventi per domini.
-2. Implementare `Phase 4` Heating partendo da:
-   - H4.1 Domain Foundation
-   - H4.2 Safe Apply Path
-3. Completare il ramo Heating con:
-   - H4.3 Vacation Timing Bindings
-   - H4.4 Vacation Curve Policy Branch
-4. Rafforzare lighting con policy conflitti zone-room configurabile (`first_wins/priority`).
+2. Fare una validazione manuale finale del Heating MVP in HA reale (branch editing, timed progression, `set_mode`).
+3. Rafforzare lighting con policy conflitti zone-room configurabile (`first_wins/priority`).
+4. Avviare `Phase 5` (Security + Constraints) quando Heating v1 e considerato stabile.
 5. Mantenere il Policy Plugin Framework come track separato: nessuna implementazione runtime finche Heating v1 fisso non e stabile.
 6. Dopo stabilizzazione Heating, valutare `P1` (framework-only) come prossimo step architetturale.
 7. Integrare Behavior Framework v1.1.

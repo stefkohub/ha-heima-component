@@ -4,9 +4,9 @@
 - Completed: `Phase 0`, `Phase 1`
 - Completed: `Phase 2`
 - In Progress: `Phase 3` (category toggles + centralized gating implemented; final catalog/heating coverage pending)
-- In Progress: `Normalization Layer` (`N1-N4` completed; `N5` advanced built-ins + fallback/diagnostics underway)
-- In Progress: `Phase 4` (Heating MVP runtime, vacation curve, observability, and shared runtime scheduler implemented)
-- Next: close remaining `Phase 3` catalog items, finish Heating v1 deferred refinements, then move to `Phase 5`
+- In Progress: `Normalization Layer` (`N1-N4` completed; `N5` materially complete for current rollout, future providers still open)
+- In Progress: `Phase 4` (Heating MVP implemented, scheduler-backed, and service semantics aligned; final polish/documentation remains)
+- Next: close remaining `Phase 3` catalog items, validate Heating in HA, then move to `Phase 5`
 
 ## Roadmap (with Normalization Rollout)
 
@@ -48,7 +48,7 @@
 - [x] N2 Diagnostics: expose normalization trace for occupancy sources (raw_state -> normalized_state/reason).
 - [x] N3 Security: normalize alarm raw states to canonical security observation; migrate `security.*` consistency logic to normalized inputs.
 - [x] N4 House Signals + People: normalize house-mode helpers and people source inputs; remove domain-level raw parsing call sites.
-- [ ] N5 Plugin Ecosystem Expansion: add advanced built-ins + external strategy providers behind the same `DerivedObservation` contract.
+- [ ] N5 Plugin Ecosystem Expansion: add external strategy providers behind the same `DerivedObservation` contract.
 - [x] N5 Plugin Ecosystem Expansion: `builtin.weighted_quorum` added, wired into room occupancy, with configurable threshold and per-source weights.
 - [x] N5 Plugin Hardening: deterministic plugin failure fallback (`unknown|off|on`), global normalizer diagnostics, and local fallback trace in occupancy/presence runtime traces.
 - [x] N5 Verification: HA end-to-end tests cover occupancy dwell, weighted quorum, people quorum, anonymous presence, and fail-safe fallback paths.
@@ -66,13 +66,13 @@
 - [x] Add Heating observability sensors (`branch`, `current_setpoint`, `last_applied_target`) and core `heating.*` runtime events.
 - [x] Add shared Runtime Scheduler and migrate all timed rechecks (occupancy, security, heating) onto it.
 - [x] Add automated runtime + HA e2e coverage for Heating MVP and scheduler-driven vacation rechecks.
-- [ ] Refine manual override detection beyond canonical `heima_heating_manual_hold` (thermostat-native/manual preset inference).
 - [x] Refine manual override detection beyond canonical `heima_heating_manual_hold` (thermostat-native/manual preset inference).
 - [x] Decide and implement the fate of `heima.set_mode` (real behavior or removal).
 - [x] Add `heating.branch_changed` only if we decide the extra event is operationally useful.
 - [x] Improve `vacation_curve` next-check precision from phase-aware scheduling to exact next quantized target-change timing.
-- [ ] Explicitly document that v1 `scheduler_delegate` means “Heima yields to external scheduler” (no direct scheduler integration).
-- [ ] Keep retry/verify logic out of Heima v1; if revisited, treat it as a future optional enhancement, not a current task.
+- [x] Explicitly document that v1 `scheduler_delegate` means “Heima yields to external scheduler” (no direct scheduler integration).
+- [x] Keep retry/verify logic out of Heima v1; if revisited, treat it as a future optional enhancement, not a current task.
+- [ ] Run a final real-HA validation pass for Heating branch editing and scheduler-driven progression before calling Heating v1 complete.
 
 7. [ ] Phase 5 — Security Domain (Read-Only) + Constraints Layer
 - Normalize security state and reason.
@@ -127,3 +127,4 @@
   - added Heating Domain mini-spec (scheduler baseline + fixed vacation override branch)
   - added Policy Plugin Framework mini-spec (future cross-domain policy extension, distinct from normalization plugins)
   - added Runtime Scheduler mini-spec and implemented the shared scheduler as the timing substrate for occupancy dwell, mismatch persistence, and Heating timed branches
+  - defined and implemented `heima.set_mode` as a final runtime-only house-state override service
