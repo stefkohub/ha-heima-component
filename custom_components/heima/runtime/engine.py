@@ -92,6 +92,8 @@ class HeimaEngine:
         self._heating_trace: dict[str, Any] = {}
         self._heating_last_target_temp: float | None = None
         self._heating_last_apply_ts: float | None = None
+        self._heating_last_reported_phase: str | None = None
+        self._heating_last_reported_target: float | None = None
         self._last_engine_enabled_state: bool | None = None
         self._events = HeimaEventPipeline(hass)
         self._normalizer = InputNormalizer(hass)
@@ -489,8 +491,9 @@ class HeimaEngine:
         current_setpoint = self._current_climate_setpoint(climate_entity)
         outdoor_temperature = self._coerce_float_from_entity(heating_cfg.get("outdoor_temperature_entity"))
 
+        previous_reason = self._state.get_sensor("heima_heating_reason")
         state = "delegated"
-        reason = "normal_branch"
+        reason = "normal_scheduler_delegate"
         phase = "normal"
         target_temperature: float | None = None
         apply_allowed = False
@@ -596,6 +599,85 @@ class HeimaEngine:
             "last_apply_ts": self._heating_last_apply_ts,
             "vacation": dict(vacation_meta),
         }
+        self._queue_heating_runtime_events(
+            selected_branch=branch_type,
+            previous_reason=str(previous_reason) if previous_reason not in (None, "") else None,
+            reason=reason,
+            phase=phase,
+            target_temperature=target_temperature,
+            apply_allowed=apply_allowed,
+            skip_small_delta=skip_small_delta,
+        )
+
+    def _queue_heating_runtime_events(
+        self,
+        *,
+        selected_branch: str,
+        previous_reason: str | None,
+        reason: str,
+        phase: str,
+        target_temperature: float | None,
+        apply_allowed: bool,
+        skip_small_delta: bool,
+    ) -> None:
+        if selected_branch == "vacation_curve" and self._heating_last_reported_phase != phase:
+            self._queue_event(
+                HeimaEvent(
+                    type="heating.vacation_phase_changed",
+                    key="heating.vacation_phase_changed",
+                    severity="info",
+                    title="Heating vacation phase changed",
+                    message=f"Heating vacation phase changed to '{phase}'.",
+                    context={"phase": phase},
+                )
+            )
+            self._heating_last_reported_phase = phase
+        elif selected_branch != "vacation_curve":
+            self._heating_last_reported_phase = None
+
+        if apply_allowed and target_temperature is not None and self._heating_last_reported_target != target_temperature:
+            self._queue_event(
+                HeimaEvent(
+                    type="heating.target_changed",
+                    key="heating.target_changed",
+                    severity="info",
+                    title="Heating target changed",
+                    message=f"Heating target updated to {target_temperature}.",
+                    context={
+                        "target_temperature": target_temperature,
+                        "branch": selected_branch,
+                        "phase": phase,
+                    },
+                )
+            )
+            self._heating_last_reported_target = target_temperature
+
+        if reason == "manual_override_blocked" and previous_reason != "manual_override_blocked":
+            self._queue_event(
+                HeimaEvent(
+                    type="heating.manual_override_blocked",
+                    key="heating.manual_override_blocked",
+                    severity="info",
+                    title="Heating blocked by manual override",
+                    message="Heating apply skipped because manual override is active.",
+                    context={"branch": selected_branch},
+                )
+            )
+
+        if skip_small_delta and previous_reason != "small_delta_skip":
+            self._queue_event(
+                HeimaEvent(
+                    type="heating.apply_skipped_small_delta",
+                    key="heating.apply_skipped_small_delta",
+                    severity="info",
+                    title="Heating apply skipped",
+                    message="Heating target change is below the configured temperature step.",
+                    context={
+                        "branch": selected_branch,
+                        "target_temperature": target_temperature,
+                    },
+                )
+            )
 
     def _finalize_heating_target(
         self,
