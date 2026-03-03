@@ -6,6 +6,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import DOMAIN
@@ -28,6 +29,7 @@ class HeimaCoordinator(DataUpdateCoordinator[HeimaRuntimeState]):
         self.entry = entry
         self.engine = HeimaEngine(hass, entry)
         self._unsub_state_changed = None
+        self._unsub_dwell_recheck = None
         self.data = HeimaRuntimeState(
             health_ok=True,
             health_reason="booting",
@@ -48,6 +50,7 @@ class HeimaCoordinator(DataUpdateCoordinator[HeimaRuntimeState]):
         """Initialize runtime and publish base state."""
         await self.engine.async_initialize()
         self._subscribe_state_changes()
+        self._schedule_dwell_recheck()
         self.data = HeimaRuntimeState(
             health_ok=self.engine.health.ok,
             health_reason=self.engine.health.reason,
@@ -62,6 +65,7 @@ class HeimaCoordinator(DataUpdateCoordinator[HeimaRuntimeState]):
         """Reload options and refresh state."""
         await self.engine.async_reload_options(self.entry)
         self._resubscribe_state_changes()
+        self._schedule_dwell_recheck()
         self.data = HeimaRuntimeState(
             health_ok=self.engine.health.ok,
             health_reason=self.engine.health.reason,
@@ -83,6 +87,7 @@ class HeimaCoordinator(DataUpdateCoordinator[HeimaRuntimeState]):
             last_decision=f"evaluation_requested:{reason}",
             last_action="",
         )
+        self._schedule_dwell_recheck()
         await self.async_refresh()
 
     async def async_emit_event(
@@ -119,6 +124,7 @@ class HeimaCoordinator(DataUpdateCoordinator[HeimaRuntimeState]):
     async def async_shutdown(self) -> None:
         """Shutdown runtime."""
         self._unsubscribe_state_changes()
+        self._unsubscribe_dwell_recheck()
         await self.engine.async_shutdown()
         _LOGGER.debug("Heima runtime shutdown")
 
@@ -130,6 +136,25 @@ class HeimaCoordinator(DataUpdateCoordinator[HeimaRuntimeState]):
         if self._unsub_state_changed:
             self._unsub_state_changed()
             self._unsub_state_changed = None
+
+    def _unsubscribe_dwell_recheck(self) -> None:
+        if self._unsub_dwell_recheck:
+            self._unsub_dwell_recheck()
+            self._unsub_dwell_recheck = None
+
+    def _schedule_dwell_recheck(self) -> None:
+        self._unsubscribe_dwell_recheck()
+        delay = self.engine.next_dwell_recheck_delay_s()
+        if delay is None:
+            return
+        delay = max(0.1, float(delay))
+
+        @callback
+        def _handle_dwell_recheck(_now) -> None:
+            self._unsub_dwell_recheck = None
+            self.hass.async_create_task(self.async_request_evaluation(reason="dwell_recheck"))
+
+        self._unsub_dwell_recheck = async_call_later(self.hass, delay, _handle_dwell_recheck)
 
     def _subscribe_state_changes(self) -> None:
         tracked_entities = self.engine.tracked_entity_ids()

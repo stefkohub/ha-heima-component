@@ -4,7 +4,8 @@
 - Completed: `Phase 0`, `Phase 1`
 - Completed: `Phase 2`
 - In Progress: `Phase 3` (category toggles + centralized gating implemented; final catalog/heating coverage pending)
-- Next: finish Phase 3 residual catalog coverage, then start Normalization Layer rollout (N1-N4) before Heating smartening (`Phase 4`)
+- In Progress: `Normalization Layer` (`N1-N4` completed; `N5` advanced built-ins + fallback/diagnostics underway)
+- Next: finish `Phase 3` residual catalog coverage, decide whether to close `N5` for merge or expand it further before `Phase 4`
 
 ## Roadmap (with Normalization Rollout)
 
@@ -36,13 +37,20 @@
 - [x] Expand core Event Catalog coverage for `people.*`, `occupancy.*`, `lighting.*`, `security.*`, `system.engine_disabled`.
 - [ ] Complete remaining Event Catalog coverage (`heating.*`, `security.mismatch`, `system.config_invalid`, `system.behavior_error`) and finalize payload standardization.
 
-5. [ ] Cross-Cut — Input Normalization Layer (Incremental Rollout N1-N4)
-- [ ] N1 Foundation: add shared normalization contracts + `InputNormalizer` facade (behavior-preserving legacy-backed adapter).
-- [ ] N1 Migration: route existing runtime raw reads through the facade (no behavioral change intended).
-- [ ] N2 Occupancy: compute room occupancy from normalized presence observations; implement `on_dwell_s` / `off_dwell_s` / `max_on_s`.
-- [ ] N2 Diagnostics: expose normalization trace for occupancy sources (raw_state -> normalized_state/reason).
-- [ ] N3 Security: normalize alarm raw states to canonical security observation; migrate `security.*` consistency logic to normalized inputs.
-- [ ] N4 House Signals + People: normalize house-mode helpers and people source inputs; remove domain-level raw parsing call sites.
+5. [ ] Cross-Cut — Input Normalization Layer (Incremental Rollout N1-N5)
+- [x] N1 Foundation: add shared normalization contracts + `InputNormalizer` facade + fusion plugin/strategy registry contract (behavior-preserving legacy-backed adapter).
+- [x] N1 Migration: route existing runtime raw reads through the facade (no behavioral change intended).
+- [x] N2 Occupancy: compute room occupancy from normalized presence observations; implement `on_dwell_s` / `off_dwell_s` / `max_on_s`.
+- [x] N2 Occupancy (operational): move room fusion to registry (`builtin.any_of` / `builtin.all_of`) and use `DerivedObservation` in occupancy decisions.
+- [x] N2 Occupancy (operational): implement dwell runtime state machine (`candidate_state/since`, `effective_state/since`) per derived room.
+- [x] N2 Occupancy (operational): enforce `max_on_s` timeout with explicit event/diagnostics trace.
+- [x] N2 Diagnostics: expose normalization trace for occupancy sources (raw_state -> normalized_state/reason).
+- [x] N3 Security: normalize alarm raw states to canonical security observation; migrate `security.*` consistency logic to normalized inputs.
+- [x] N4 House Signals + People: normalize house-mode helpers and people source inputs; remove domain-level raw parsing call sites.
+- [ ] N5 Plugin Ecosystem Expansion: add advanced built-ins + external strategy providers behind the same `DerivedObservation` contract.
+- [x] N5 Plugin Ecosystem Expansion: `builtin.weighted_quorum` added, wired into room occupancy, with configurable threshold and per-source weights.
+- [x] N5 Plugin Hardening: deterministic plugin failure fallback (`unknown|off|on`), global normalizer diagnostics, and local fallback trace in occupancy/presence runtime traces.
+- [x] N5 Verification: HA end-to-end tests cover occupancy dwell, weighted quorum, people quorum, anonymous presence, and fail-safe fallback paths.
 
 6. [ ] Phase 4 — Heating Domain (Safe Apply)
 - Implement base intents (`auto`, `eco`, `comfort`, `preheat`, `off`).
@@ -83,10 +91,14 @@
   - zone occupancy ignores non-sensorized rooms
   - lighting `off` fallback semantics
 - Automated tests expanded (now includes flow-like options tests, lighting runtime regressions, notify pipeline end-to-end)
+- Automated tests expanded further:
+  - normalization foundation/runtime migration coverage
+  - plugin failure fallback and weighted quorum coverage
+  - real HA end-to-end tests for normalization-critical paths
 - Phase 3 hardening:
   - notification event category toggles in Options Flow
   - centralized event gating in runtime (spec-aligned, `system` always enabled)
   - startup race handling for `notify.*` routes with deferred delivery/retry
   - additional event catalog emissions (`people.*`, `house_state.changed`, occupancy inconsistencies, security inconsistency, zone conflicts)
 - Architecture planning:
-  - added Input Normalization Layer mini-spec (shared contracts/facade + incremental rollout N1-N4) to avoid fragmented smart-policy implementations on raw HA states
+  - added Input Normalization Layer mini-spec (shared contracts/facade + plugin-based fusion registry + incremental rollout N1-N5) to avoid fragmented smart-policy implementations on raw HA states

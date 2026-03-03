@@ -36,22 +36,13 @@ from ..entities.registry import build_registry
 from ..models import HeimaOptions
 from .contracts import ApplyPlan, ApplyStep, HeimaEvent
 from .lighting import pick_scene_for_intent_with_trace, resolve_zone_intent
+from .normalization.service import InputNormalizer
 from .notifications import HeimaEventPipeline
 from .policy import resolve_house_state
 from .snapshot import DecisionSnapshot
 from .state_store import CanonicalState
 
 _LOGGER = logging.getLogger(__name__)
-
-_PRESENCE_ON_STATES = {
-    "on",
-    "home",
-    "open",
-    "occupied",
-    "detected",
-    "true",
-    "1",
-}
 
 _HOUSE_SIGNAL_ENTITIES = {
     "input_boolean.vacation_mode",
@@ -91,12 +82,21 @@ class HeimaEngine:
         self._lighting_conflicts_last_eval: list[dict[str, Any]] = []
         self._last_engine_enabled_state: bool | None = None
         self._events = HeimaEventPipeline(hass)
+        self._normalizer = InputNormalizer(hass)
         self._pending_events: list[HeimaEvent] = []
         self._suppressed_event_categories: dict[str, int] = {}
         self._occupancy_home_no_room_since: float | None = None
         self._occupancy_home_no_room_emitted: bool = False
         self._occupancy_room_no_home_since: dict[str, float] = {}
         self._occupancy_room_no_home_emitted: set[str] = set()
+        self._occupancy_room_candidate_state: dict[str, str] = {}
+        self._occupancy_room_candidate_since: dict[str, float] = {}
+        self._occupancy_room_effective_state: dict[str, str] = {}
+        self._occupancy_room_effective_since: dict[str, float] = {}
+        self._occupancy_room_trace: dict[str, dict[str, Any]] = {}
+        self._group_presence_trace: dict[str, dict[str, Any]] = {}
+        self._next_timed_recheck_at: float | None = None
+        self._security_observation_trace: dict[str, Any] = {}
         self._security_armed_away_but_home_since: float | None = None
         self._security_armed_away_but_home_emitted: bool = False
 
@@ -237,6 +237,7 @@ class HeimaEngine:
     def _compute_snapshot(self, reason: str) -> DecisionSnapshot:
         options = dict(self._entry.options)
         now = datetime.now(timezone.utc).isoformat()
+        self._next_timed_recheck_at = None
 
         named_people = options.get(OPT_PEOPLE_NAMED, [])
         home_people: list[str] = []
@@ -269,7 +270,11 @@ class HeimaEngine:
         if anon_cfg.get("enabled"):
             anon_sources = list(anon_cfg.get("sources", []))
             required = int(anon_cfg.get("required", 1))
-            anon_home, active_count = self._compute_group_presence(anon_sources, required)
+            anon_home, active_count = self._compute_group_presence(
+                anon_sources,
+                required,
+                trace_key="anonymous",
+            )
             anon_confidence = 100 if anon_home else 0
             anon_source = ",".join(anon_sources) if anon_sources else "none"
             anon_weight = int(anon_cfg.get("anonymous_count_weight", 1)) if anon_home else 0
@@ -295,16 +300,16 @@ class HeimaEngine:
             room_id = room.get("room_id")
             if not room_id:
                 continue
-            occupancy_mode = self._room_occupancy_mode(room)
-            is_occupied = self._compute_room_occupancy(room)
+            is_occupied, occ_trace = self._compute_room_occupancy(room)
             prev_value = self._state.get_binary(f"heima_occ_{room_id}")
             self._state.set_binary(f"heima_occ_{room_id}", is_occupied)
             self._state.set_sensor(
                 f"heima_occ_{room_id}_source",
-                "none" if occupancy_mode == "none" else ",".join(room.get("sources", [])),
+                "none" if self._room_occupancy_mode(room) == "none" else ",".join(room.get("sources", [])),
             )
             if prev_value != is_occupied:
                 self._state.set_sensor(f"heima_occ_{room_id}_last_change", now)
+            self._occupancy_room_trace[str(room_id)] = occ_trace
             if is_occupied:
                 occupied_rooms.append(room_id)
 
@@ -312,10 +317,26 @@ class HeimaEngine:
         security_state = "unknown"
         security_reason = "disabled"
         if security_cfg.get("enabled"):
-            security_state = self._read_state(str(security_cfg.get("security_state_entity", ""))) or "unknown"
-            security_reason = "bound_entity"
+            entity_id = str(security_cfg.get("security_state_entity", ""))
+            security_obs = self._normalizer.security(
+                entity_id,
+                {
+                    "armed_away_value": security_cfg.get("armed_away_value", "armed_away"),
+                    "armed_home_value": security_cfg.get("armed_home_value", "armed_home"),
+                },
+            )
+            security_state = security_obs.state
+            security_reason = security_obs.reason or "normalized"
+            self._security_observation_trace = security_obs.as_dict()
             self._state.set_sensor("heima_security_state", security_state)
             self._state.set_sensor("heima_security_reason", security_reason)
+        else:
+            self._security_observation_trace = {
+                "state": "unknown",
+                "reason": "disabled",
+                "available": False,
+                "source_entity_id": None,
+            }
 
         vacation_mode = self._is_on_any(["input_boolean.vacation_mode"])
         guest_mode = self._is_on_any(["input_boolean.guest_mode"])
@@ -379,6 +400,16 @@ class HeimaEngine:
             security_state=security_state,
             notes=f"reason={reason}",
         )
+
+    def next_dwell_recheck_delay_s(self) -> float | None:
+        """Return seconds until next timed recheck should be evaluated."""
+        if self._next_timed_recheck_at is None:
+            return None
+        return max(0.0, self._next_timed_recheck_at - time.monotonic())
+
+    def _schedule_timed_recheck_deadline(self, deadline: float) -> None:
+        if self._next_timed_recheck_at is None or deadline < self._next_timed_recheck_at:
+            self._next_timed_recheck_at = deadline
 
     def _compute_lighting_intents(self, house_state: str, occupied_rooms: list[str]) -> dict[str, str]:
         options = dict(self._entry.options)
@@ -868,8 +899,7 @@ class HeimaEngine:
             self._security_armed_away_but_home_emitted = False
             return
 
-        armed_away_value = str(security_cfg.get("armed_away_value", "armed_away"))
-        mismatch_active = security_state == armed_away_value and anyone_home
+        mismatch_active = security_state == "armed_away" and anyone_home
         persist_s = 0 if policy == "strict" else mismatch_cfg["persist_s"]
 
         room_configs = self._room_configs()
@@ -891,6 +921,7 @@ class HeimaEngine:
                     message="Security is armed away while someone is home.",
                     context={
                         "security_state": security_state,
+                        "security_observation_reason": self._security_observation_trace.get("reason"),
                         "people_home_list": list(people_home_list),
                         "policy": policy,
                         "persist_s": persist_s,
@@ -975,6 +1006,7 @@ class HeimaEngine:
             if persist_s <= 0 or (now - self._occupancy_home_no_room_since) >= persist_s:
                 self._occupancy_home_no_room_emitted = True
                 return True
+            self._schedule_timed_recheck_deadline(self._occupancy_home_no_room_since + persist_s)
             return False
 
         if key.startswith("room_no_home:"):
@@ -990,6 +1022,7 @@ class HeimaEngine:
             if persist_s <= 0 or (now - self._occupancy_room_no_home_since[room_id]) >= persist_s:
                 self._occupancy_room_no_home_emitted.add(room_id)
                 return True
+            self._schedule_timed_recheck_deadline(self._occupancy_room_no_home_since[room_id] + persist_s)
             return False
 
         return False
@@ -1012,6 +1045,7 @@ class HeimaEngine:
         if persist_s <= 0 or (now - self._security_armed_away_but_home_since) >= persist_s:
             self._security_armed_away_but_home_emitted = True
             return True
+        self._schedule_timed_recheck_deadline(self._security_armed_away_but_home_since + persist_s)
         return False
 
     def _event_category(self, event_type: str) -> str:
@@ -1116,7 +1150,9 @@ class HeimaEngine:
         if method == "quorum":
             sources = list(person_cfg.get("sources", []))
             required = int(person_cfg.get("required", 1))
-            is_home, active_count = self._compute_group_presence(sources, required)
+            slug = str(person_cfg.get("slug", ""))
+            trace_key = f"person:{slug}" if slug else "person:unknown"
+            is_home, active_count = self._compute_group_presence(sources, required, trace_key=trace_key)
             confidence = int((active_count / max(1, len(sources))) * 100) if sources else 0
             return is_home, "quorum", confidence
 
@@ -1128,50 +1164,194 @@ class HeimaEngine:
             return False, "manual", 100
         return False, "manual", 0
 
-    def _compute_group_presence(self, sources: list[str], required: int) -> tuple[bool, int]:
-        active = 0
-        for entity_id in sources:
-            if self._is_presence_on(entity_id):
-                active += 1
-        return active >= max(1, required), active
+    def _compute_group_presence(
+        self,
+        sources: list[str],
+        required: int,
+        *,
+        trace_key: str | None = None,
+    ) -> tuple[bool, int]:
+        observations = [self._normalizer.presence(entity_id) for entity_id in sources]
+        active_count = sum(1 for obs in observations if obs.state == "on")
+        fused = self._normalizer.derive(
+            kind="presence",
+            inputs=observations,
+            strategy_cfg={
+                "plugin_id": "builtin.quorum",
+                "required": int(required),
+                "fallback_state": "off",
+            },
+            context={"source": "group_presence"},
+        )
+        if trace_key:
+            self._group_presence_trace[trace_key] = {
+                "source_observations": [obs.as_dict() for obs in observations],
+                "fused_observation": fused.as_dict(),
+                "plugin_id": fused.plugin_id,
+                "required": int(required),
+                "active_count": active_count,
+                "used_plugin_fallback": fused.reason == "plugin_error_fallback",
+            }
+        return fused.state == "on", active_count
 
-    def _compute_room_occupancy(self, room_cfg: dict[str, Any]) -> bool:
-        if self._room_occupancy_mode(room_cfg) == "none":
-            return False
+    def _compute_room_occupancy(self, room_cfg: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+        room_id = str(room_cfg.get("room_id", ""))
+        mode = self._room_occupancy_mode(room_cfg)
+        if mode == "none":
+            return False, {
+                "room_id": room_id,
+                "occupancy_mode": "none",
+                "source_observations": [],
+                "fused_observation": None,
+                "plugin_id": None,
+                "candidate_state": "off",
+                "candidate_since": None,
+                "effective_state": "off",
+                "effective_since": None,
+                "on_dwell_s": None,
+                "off_dwell_s": None,
+                "max_on_s": None,
+                "forced_off_by_max_on": False,
+            }
+
         sources = list(room_cfg.get("sources", []))
-        logic = room_cfg.get("logic", "any_of")
         if not sources:
-            return False
+            return False, {
+                "room_id": room_id,
+                "occupancy_mode": mode,
+                "source_observations": [],
+                "fused_observation": None,
+                "plugin_id": None,
+                "candidate_state": "unknown",
+                "candidate_since": None,
+                "effective_state": "off",
+                "effective_since": None,
+                "on_dwell_s": int(room_cfg.get("on_dwell_s", 5)),
+                "off_dwell_s": int(room_cfg.get("off_dwell_s", 120)),
+                "max_on_s": room_cfg.get("max_on_s"),
+                "forced_off_by_max_on": False,
+            }
 
-        values = [self._is_presence_on(entity_id) for entity_id in sources]
-        return all(values) if logic == "all_of" else any(values)
+        logic = str(room_cfg.get("logic", "any_of"))
+        if logic == "all_of":
+            plugin_id = "builtin.all_of"
+        elif logic == "weighted_quorum":
+            plugin_id = "builtin.weighted_quorum"
+        else:
+            plugin_id = "builtin.any_of"
+
+        observations = [self._normalizer.presence(entity_id) for entity_id in sources]
+        strategy_cfg: dict[str, Any] = {"plugin_id": plugin_id}
+        strategy_cfg["fallback_state"] = "off"
+        if logic == "weighted_quorum" and room_cfg.get("weight_threshold") not in (None, ""):
+            strategy_cfg["threshold"] = float(room_cfg["weight_threshold"])
+        if logic == "weighted_quorum" and isinstance(room_cfg.get("source_weights"), dict):
+            strategy_cfg["weights"] = {
+                str(entity_id): float(weight)
+                for entity_id, weight in room_cfg["source_weights"].items()
+                if str(entity_id)
+            }
+        fused = self._normalizer.derive(
+            kind="presence",
+            inputs=observations,
+            strategy_cfg=strategy_cfg,
+            context={"room_id": room_id},
+        )
+
+        candidate_state = fused.state if fused.state in {"on", "off"} else "unknown"
+        now = time.monotonic()
+        previous_candidate = self._occupancy_room_candidate_state.get(room_id)
+        if previous_candidate != candidate_state:
+            self._occupancy_room_candidate_state[room_id] = candidate_state
+            self._occupancy_room_candidate_since[room_id] = now
+
+        candidate_since = self._occupancy_room_candidate_since.get(room_id, now)
+        on_dwell_s = int(room_cfg.get("on_dwell_s", 5))
+        off_dwell_s = int(room_cfg.get("off_dwell_s", 120))
+        max_on_s_raw = room_cfg.get("max_on_s")
+        max_on_s = int(max_on_s_raw) if max_on_s_raw not in (None, "") else None
+
+        effective_state = self._occupancy_room_effective_state.get(room_id)
+        if effective_state is None:
+            effective_state = "on" if candidate_state == "on" else "off"
+            self._occupancy_room_effective_state[room_id] = effective_state
+            self._occupancy_room_effective_since[room_id] = now
+        elif candidate_state in {"on", "off"} and candidate_state != effective_state:
+            dwell = on_dwell_s if candidate_state == "on" else off_dwell_s
+            dwell = max(0, dwell)
+            if (now - candidate_since) >= dwell:
+                effective_state = candidate_state
+                self._occupancy_room_effective_state[room_id] = effective_state
+                self._occupancy_room_effective_since[room_id] = now
+            elif dwell > 0:
+                deadline = candidate_since + dwell
+                self._schedule_timed_recheck_deadline(deadline)
+
+        forced_off_by_max_on = False
+        effective_since = self._occupancy_room_effective_since.get(room_id, now)
+        if max_on_s is not None and max_on_s > 0 and effective_state == "on":
+            if (now - effective_since) >= max_on_s:
+                forced_off_by_max_on = True
+                effective_state = "off"
+                self._occupancy_room_effective_state[room_id] = "off"
+                self._occupancy_room_effective_since[room_id] = now
+                self._queue_event(
+                    HeimaEvent(
+                        type="occupancy.max_on_timeout",
+                        key=f"occupancy.max_on_timeout.{room_id}",
+                        severity="info",
+                        title="Room occupancy max-on timeout",
+                        message=f"Room '{room_id}' occupancy forced off after max_on_s timeout.",
+                        context={"room": room_id, "max_on_s": max_on_s},
+                    )
+                )
+        effective_since = self._occupancy_room_effective_since.get(room_id, now)
+
+        trace = {
+            "room_id": room_id,
+            "occupancy_mode": mode,
+            "source_observations": [obs.as_dict() for obs in observations],
+            "fused_observation": fused.as_dict(),
+            "plugin_id": fused.plugin_id,
+            "used_plugin_fallback": fused.reason == "plugin_error_fallback",
+            "configured_source_weights": (
+                dict(room_cfg.get("source_weights", {})) if logic == "weighted_quorum" else {}
+            ),
+            "effective_source_weights": dict(fused.evidence.get("weights", {}))
+            if isinstance(fused.evidence, dict)
+            else {},
+            "source_weight_contributions": [
+                {
+                    "entity_id": obs.source_entity_id,
+                    "state": obs.state,
+                    "weight": (
+                        fused.evidence.get("weights", {}).get(obs.source_entity_id or "", 1.0)
+                        if isinstance(fused.evidence, dict)
+                        else 1.0
+                    ),
+                    "contributes_to_on": obs.state == "on",
+                }
+                for obs in observations
+            ],
+            "candidate_state": candidate_state,
+            "candidate_since": candidate_since,
+            "effective_state": effective_state,
+            "effective_since": effective_since,
+            "on_dwell_s": on_dwell_s,
+            "off_dwell_s": off_dwell_s,
+            "max_on_s": max_on_s,
+            "forced_off_by_max_on": forced_off_by_max_on,
+        }
+        return effective_state == "on", trace
 
     def _is_entity_home(self, entity_id: str | None) -> bool:
-        if not entity_id:
-            return False
-        state = self._read_state(entity_id)
-        return state == "home"
+        return self._normalizer.presence(entity_id).state == "on"
 
     def _is_presence_on(self, entity_id: str | None) -> bool:
-        state = self._read_state(entity_id)
-        if state is None:
-            return False
-        lowered = state.lower()
-        if lowered in _PRESENCE_ON_STATES:
-            return True
-        try:
-            return float(state) > 0
-        except ValueError:
-            return False
+        return self._normalizer.presence(entity_id).state == "on"
 
     def _is_on_any(self, entity_ids: list[str]) -> bool:
-        return any(self._is_presence_on(entity_id) for entity_id in entity_ids)
-
-    def _read_state(self, entity_id: str | None) -> str | None:
-        if not entity_id:
-            return None
-        state = self._hass.states.get(entity_id)
-        return state.state if state else None
+        return any(self._normalizer.boolean_signal(entity_id).state == "on" for entity_id in entity_ids)
 
     def _apply_snapshot_to_canonical_state(self, snapshot: DecisionSnapshot) -> None:
         for zone_id in list(snapshot.lighting_intents.keys()):
@@ -1217,4 +1397,14 @@ class HeimaEngine:
                 "hold_seen_state_by_room": dict(self._lighting_hold_seen_state),
             },
             "events": self._events.stats.as_dict(),
+            "presence": {
+                "group_trace": dict(self._group_presence_trace),
+            },
+            "occupancy": {
+                "room_trace": dict(self._occupancy_room_trace),
+            },
+            "security": {
+                "observation_trace": dict(self._security_observation_trace),
+            },
+            "normalization": self._normalizer.diagnostics(),
         }

@@ -16,3 +16,8 @@ This repository currently contains an implementation skeleton aligned with the s
 
 ## Specs
 See `docs/specs/INDEX.md` and the versioned spec files.
+
+## Development
+- Install dev dependencies: `python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`
+- Run the current automated suite: `.venv/bin/pytest -q`
+- The HA integration-test harness (`pytest-homeassistant-custom-component`) owns the compatible `pytest` / `pytest-asyncio` versions for this repo's Home Assistant line, so we do not pin those separately in `requirements-dev.txt`.
