@@ -128,6 +128,10 @@ def build_registry(entry: ConfigEntry) -> HeimaRegistry:
         selects.append(
             _sel(_k("heima_heating_intent"), "Heima Heating Intent", HEATING_INTENTS)
         )
+        sensors.append(_s(_k("heima_heating_state"), "Heima Heating State"))
+        sensors.append(_s(_k("heima_heating_reason"), "Heima Heating Reason"))
+        sensors.append(_s(_k("heima_heating_phase"), "Heima Heating Phase"))
+        sensors.append(_s(_k("heima_heating_target_temp"), "Heima Heating Target Temp"))
         binaries.append(_b(_k("heima_heating_manual_hold"), "Heima Heating Manual Hold"))
         binaries.append(_b(_k("heima_heating_applying_guard"), "Heima Heating Applying Guard"))
 

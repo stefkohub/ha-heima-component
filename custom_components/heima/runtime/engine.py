@@ -23,6 +23,7 @@ from ..const import (
     DEFAULT_SECURITY_MISMATCH_PERSIST_S,
     DEFAULT_SECURITY_MISMATCH_POLICY,
     EVENT_CATEGORIES_ALL,
+    OPT_HEATING,
     OPT_LIGHTING_APPLY_MODE,
     OPT_LIGHTING_ROOMS,
     OPT_LIGHTING_ZONES,
@@ -60,6 +61,7 @@ _HOUSE_SIGNAL_ENTITIES = {
 }
 
 _LIGHTING_MIN_SECONDS_BETWEEN_APPLIES = 10
+_HEATING_MIN_SECONDS_BETWEEN_APPLIES = 60
 
 
 @dataclass(frozen=True)
@@ -87,6 +89,9 @@ class HeimaEngine:
         self._lighting_zone_trace: dict[str, dict[str, Any]] = {}
         self._lighting_room_trace: dict[str, list[dict[str, Any]]] = {}
         self._lighting_conflicts_last_eval: list[dict[str, Any]] = []
+        self._heating_trace: dict[str, Any] = {}
+        self._heating_last_target_temp: float | None = None
+        self._heating_last_apply_ts: float | None = None
         self._last_engine_enabled_state: bool | None = None
         self._events = HeimaEventPipeline(hass)
         self._normalizer = InputNormalizer(hass)
@@ -220,6 +225,19 @@ class HeimaEngine:
         if security_entity:
             tracked.add(str(security_entity))
 
+        heating = options.get(OPT_HEATING, {})
+        for key in (
+            "climate_entity",
+            "outdoor_temperature_entity",
+            "vacation_hours_from_start_entity",
+            "vacation_hours_to_end_entity",
+            "vacation_total_hours_entity",
+            "vacation_is_long_entity",
+        ):
+            value = heating.get(key)
+            if value:
+                tracked.add(str(value))
+
         return tracked
 
     def _build_default_state(self) -> None:
@@ -242,6 +260,14 @@ class HeimaEngine:
             self._state.sensors["heima_last_event"] = ""
         if "heima_event_stats" in self._state.sensors:
             self._state.sensors["heima_event_stats"] = "{}"
+        if "heima_heating_state" in self._state.sensors:
+            self._state.sensors["heima_heating_state"] = "idle"
+        if "heima_heating_reason" in self._state.sensors:
+            self._state.sensors["heima_heating_reason"] = "not_configured"
+        if "heima_heating_phase" in self._state.sensors:
+            self._state.sensors["heima_heating_phase"] = "normal"
+        if "heima_heating_target_temp" in self._state.sensors:
+            self._state.sensors["heima_heating_target_temp"] = None
 
     def _compute_snapshot(self, reason: str) -> DecisionSnapshot:
         options = dict(self._entry.options)
@@ -387,6 +413,7 @@ class HeimaEngine:
         )
 
         heating_intent = self._state.get_select("heima_heating_intent") or "auto"
+        self._compute_heating_runtime(house_state=house_state)
 
         self._state.set_binary("heima_anyone_home", anyone_home)
         self._state.set_sensor("heima_people_count", people_count)
@@ -438,6 +465,141 @@ class HeimaEngine:
     def _schedule_timed_recheck_deadline(self, deadline: float) -> None:
         if self._next_timed_recheck_at is None or deadline < self._next_timed_recheck_at:
             self._next_timed_recheck_at = deadline
+
+    def _compute_heating_runtime(self, *, house_state: str) -> None:
+        heating_cfg = dict(self._entry.options.get(OPT_HEATING, {}))
+        if not heating_cfg:
+            self._heating_trace = {
+                "configured": False,
+                "state": "idle",
+                "reason": "not_configured",
+                "phase": "normal",
+                "target_temperature": None,
+            }
+            return
+
+        climate_entity = str(heating_cfg.get("climate_entity", "")).strip()
+        apply_mode = str(heating_cfg.get("apply_mode", "delegate_to_scheduler") or "delegate_to_scheduler")
+        branches = heating_cfg.get("override_branches", {})
+        branch_cfg = dict(branches.get(house_state, {})) if isinstance(branches, dict) else {}
+        branch_type = str(branch_cfg.get("branch", "disabled") or "disabled")
+        manual_guard_enabled = bool(heating_cfg.get("manual_override_guard", True))
+        manual_hold = bool(self._state.get_binary("heima_heating_manual_hold"))
+        temperature_step = self._coerce_positive_float(heating_cfg.get("temperature_step"), default=0.5)
+        current_setpoint = self._current_climate_setpoint(climate_entity)
+
+        state = "delegated"
+        reason = "normal_branch"
+        phase = "normal"
+        target_temperature: float | None = None
+        apply_allowed = False
+        applying_guard = False
+        skip_small_delta = False
+        skip_rate_limited = False
+
+        if branch_type == "scheduler_delegate":
+            reason = "scheduler_delegate_branch"
+            phase = "scheduler_delegate"
+        elif branch_type == "fixed_target":
+            phase = "fixed_target"
+            target_temperature = self._coerce_positive_float(branch_cfg.get("target_temperature"), default=None)
+            if target_temperature is None:
+                state = "inactive"
+                reason = "invalid_target_temperature"
+                applying_guard = True
+            elif apply_mode != "set_temperature":
+                state = "delegated"
+                reason = "apply_mode_delegate_to_scheduler"
+            elif manual_guard_enabled and manual_hold:
+                state = "blocked"
+                reason = "manual_override_blocked"
+                applying_guard = True
+            else:
+                diff = (
+                    None
+                    if current_setpoint is None
+                    else abs(float(target_temperature) - float(current_setpoint))
+                )
+                if diff is not None and diff < temperature_step:
+                    state = "idle"
+                    reason = "small_delta_skip"
+                    skip_small_delta = True
+                    applying_guard = True
+                elif self._heating_last_target_temp == target_temperature and self._heating_last_apply_ts is not None:
+                    if (time.monotonic() - self._heating_last_apply_ts) < _HEATING_MIN_SECONDS_BETWEEN_APPLIES:
+                        state = "idle"
+                        reason = "apply_rate_limited"
+                        skip_rate_limited = True
+                        applying_guard = True
+                    else:
+                        state = "target_active"
+                        reason = "fixed_target_branch"
+                        apply_allowed = True
+                else:
+                    state = "target_active"
+                    reason = "fixed_target_branch"
+                    apply_allowed = True
+        elif branch_type == "vacation_curve":
+            state = "inactive"
+            reason = "vacation_curve_not_implemented"
+            phase = "vacation_curve"
+        else:
+            branch_type = "disabled"
+
+        self._state.set_sensor("heima_heating_state", state)
+        self._state.set_sensor("heima_heating_reason", reason)
+        self._state.set_sensor("heima_heating_phase", phase)
+        self._state.set_sensor("heima_heating_target_temp", target_temperature)
+        self._state.set_binary("heima_heating_applying_guard", applying_guard)
+
+        self._heating_trace = {
+            "configured": True,
+            "climate_entity": climate_entity,
+            "apply_mode": apply_mode,
+            "current_house_state": house_state,
+            "selected_branch": branch_type,
+            "current_setpoint": current_setpoint,
+            "target_temperature": target_temperature,
+            "temperature_step": temperature_step,
+            "manual_override_guard_enabled": manual_guard_enabled,
+            "manual_hold": manual_hold,
+            "state": state,
+            "reason": reason,
+            "phase": phase,
+            "apply_allowed": apply_allowed,
+            "applying_guard": applying_guard,
+            "skip_small_delta": skip_small_delta,
+            "skip_rate_limited": skip_rate_limited,
+            "rate_limit_window_s": _HEATING_MIN_SECONDS_BETWEEN_APPLIES,
+            "last_applied_target": self._heating_last_target_temp,
+            "last_apply_ts": self._heating_last_apply_ts,
+        }
+
+    def _current_climate_setpoint(self, entity_id: str) -> float | None:
+        return self._coerce_positive_float(self._state_attr(entity_id, "temperature"), default=None)
+
+    def _state_attr(self, entity_id: str | None, attr_name: str) -> Any:
+        if not entity_id:
+            return None
+        state = self._hass.states.get(entity_id)
+        if state is None:
+            return None
+        attrs = getattr(state, "attributes", {}) or {}
+        if not isinstance(attrs, dict):
+            return None
+        return attrs.get(attr_name)
+
+    @staticmethod
+    def _coerce_positive_float(value: Any, *, default: float | None) -> float | None:
+        if value in (None, ""):
+            return default
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        if parsed <= 0:
+            return default
+        return parsed
 
     def _compute_lighting_intents(self, house_state: str, occupied_rooms: list[str]) -> dict[str, str]:
         options = dict(self._entry.options)
@@ -660,6 +822,25 @@ class HeimaEngine:
                     reason=f"intent:{intent}",
                 )
 
+        heating_trace = dict(self._heating_trace)
+        if heating_trace.get("configured") and heating_trace.get("apply_allowed"):
+            climate_entity = str(heating_trace.get("climate_entity", "")).strip()
+            target_temperature = heating_trace.get("target_temperature")
+            if climate_entity and isinstance(target_temperature, (int, float)):
+                steps.append(
+                    ApplyStep(
+                        domain="heating",
+                        target=climate_entity,
+                        action="climate.set_temperature",
+                        params={
+                            "entity_id": climate_entity,
+                            "hvac_mode": "heat",
+                            "temperature": float(target_temperature),
+                        },
+                        reason=f"branch:{heating_trace.get('selected_branch', 'disabled')}",
+                    )
+                )
+
         self._lighting_room_trace = room_trace
         self._lighting_conflicts_last_eval = conflicts
         return ApplyPlan(steps=steps)
@@ -712,6 +893,37 @@ class HeimaEngine:
                     continue
                 except Exception:
                     _LOGGER.exception("Lighting apply failed for room area '%s'", area_id)
+                    continue
+
+            if step.action == "climate.set_temperature":
+                climate_entity = step.params.get("entity_id")
+                if not isinstance(climate_entity, str) or not climate_entity.startswith("climate."):
+                    continue
+
+                if self._hass.states.get(climate_entity) is None:
+                    _LOGGER.warning("Skipping missing climate entity: %s", climate_entity)
+                    continue
+                try:
+                    await self._hass.services.async_call(
+                        "climate",
+                        "set_temperature",
+                        dict(step.params),
+                        blocking=False,
+                    )
+                    self._heating_last_target_temp = (
+                        float(step.params["temperature"])
+                        if isinstance(step.params.get("temperature"), (int, float))
+                        else self._heating_last_target_temp
+                    )
+                    self._heating_last_apply_ts = time.monotonic()
+                    continue
+                except ServiceNotFound:
+                    _LOGGER.warning(
+                        "Skipping heating apply during startup/race: service climate.set_temperature not available"
+                    )
+                    continue
+                except Exception:
+                    _LOGGER.exception("Heating apply failed for climate '%s'", climate_entity)
                     continue
 
     def _should_apply_scene(self, room_id: str, scene_entity: str) -> bool:
@@ -1483,6 +1695,7 @@ class HeimaEngine:
                 "last_apply_ts_by_room": dict(self._lighting_last_ts),
                 "hold_seen_state_by_room": dict(self._lighting_hold_seen_state),
             },
+            "heating": dict(self._heating_trace),
             "events": self._events.stats.as_dict(),
             "presence": {
                 "group_trace": dict(self._group_presence_trace),

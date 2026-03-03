@@ -462,3 +462,59 @@ async def test_e2e_house_signal_helpers_use_boolean_plugin_trace(
     assert trace["plugin_id"] == "builtin.any_of"
     assert trace["used_plugin_fallback"] is False
     assert trace["fused_observation"]["state"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_e2e_heating_fixed_target_branch_updates_canonical_entities_and_calls_climate(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    calls: list[dict[str, object]] = []
+
+    async def _capture_climate_call(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("climate", "set_temperature", _capture_climate_call)
+
+    entry = _entry(
+        {
+            "heating": {
+                "climate_entity": "climate.test_thermostat",
+                "apply_mode": "set_temperature",
+                "temperature_step": 0.5,
+                "manual_override_guard": True,
+                "override_branches": {
+                    "away": {
+                        "branch": "fixed_target",
+                        "target_temperature": 20.0,
+                    }
+                },
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("climate.test_thermostat", "heat", {"temperature": 18.0})
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.heima_heating_state") is not None
+    assert hass.states.get("sensor.heima_heating_state").state == "target_active"
+    assert hass.states.get("sensor.heima_heating_reason").state == "fixed_target_branch"
+    assert hass.states.get("sensor.heima_heating_phase").state == "fixed_target"
+    assert float(hass.states.get("sensor.heima_heating_target_temp").state) == 20.0
+
+    assert calls == [
+        {
+            "entity_id": "climate.test_thermostat",
+            "hvac_mode": "heat",
+            "temperature": 20.0,
+        }
+    ]
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    trace = coordinator.engine.diagnostics()["heating"]
+    assert trace["selected_branch"] == "fixed_target"
+    assert trace["apply_allowed"] is True
