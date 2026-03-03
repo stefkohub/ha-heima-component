@@ -96,6 +96,7 @@ class HeimaEngine:
         self._occupancy_room_effective_since: dict[str, float] = {}
         self._occupancy_room_trace: dict[str, dict[str, Any]] = {}
         self._group_presence_trace: dict[str, dict[str, Any]] = {}
+        self._house_signals_trace: dict[str, dict[str, Any]] = {}
         self._next_timed_recheck_at: float | None = None
         self._security_observation_trace: dict[str, Any] = {}
         self._security_corroboration_trace: dict[str, Any] = {}
@@ -344,11 +345,26 @@ class HeimaEngine:
                 "source_entity_id": None,
             }
 
-        vacation_mode = self._is_on_any(["input_boolean.vacation_mode"])
-        guest_mode = self._is_on_any(["input_boolean.guest_mode"])
-        sleep_window = self._is_on_any(["binary_sensor.sleep_window"])
-        relax_mode = self._is_on_any(["binary_sensor.relax_mode"])
-        work_window = self._is_on_any(["binary_sensor.work_window"])
+        vacation_mode = self._compute_house_signal(
+            "vacation_mode",
+            ["input_boolean.vacation_mode"],
+        )
+        guest_mode = self._compute_house_signal(
+            "guest_mode",
+            ["input_boolean.guest_mode"],
+        )
+        sleep_window = self._compute_house_signal(
+            "sleep_window",
+            ["binary_sensor.sleep_window"],
+        )
+        relax_mode = self._compute_house_signal(
+            "relax_mode",
+            ["binary_sensor.relax_mode"],
+        )
+        work_window = self._compute_house_signal(
+            "work_window",
+            ["binary_sensor.work_window"],
+        )
 
         house_state, house_reason = resolve_house_state(
             anyone_home=anyone_home,
@@ -1251,6 +1267,25 @@ class HeimaEngine:
             }
         return fused, active_count
 
+    def _compute_house_signal(self, trace_key: str, entity_ids: list[str]) -> bool:
+        observations = [self._normalizer.boolean_signal(entity_id) for entity_id in entity_ids]
+        fused = self._normalizer.derive(
+            kind="boolean_signal",
+            inputs=observations,
+            strategy_cfg=build_signal_set_strategy_cfg(
+                strategy="any_of",
+                fallback_state="off",
+            ),
+            context={"source": "house_signal", "signal": trace_key},
+        )
+        self._house_signals_trace[trace_key] = {
+            "source_observations": [obs.as_dict() for obs in observations],
+            "fused_observation": fused.as_dict(),
+            "plugin_id": fused.plugin_id,
+            "used_plugin_fallback": fused.reason == "plugin_error_fallback",
+        }
+        return fused.state == "on"
+
     def _compute_room_occupancy(self, room_cfg: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         room_id = str(room_cfg.get("room_id", ""))
         mode = self._room_occupancy_mode(room_cfg)
@@ -1445,6 +1480,9 @@ class HeimaEngine:
             "events": self._events.stats.as_dict(),
             "presence": {
                 "group_trace": dict(self._group_presence_trace),
+            },
+            "house_signals": {
+                "trace": dict(self._house_signals_trace),
             },
             "occupancy": {
                 "room_trace": dict(self._occupancy_room_trace),

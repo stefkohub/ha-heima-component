@@ -441,3 +441,24 @@ async def test_e2e_security_smart_uses_boolean_plugin_corroboration_trace(
     assert trace["plugin_id"] == "builtin.any_of"
     assert trace["used_plugin_fallback"] is False
     assert trace["fused_observation"]["state"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_e2e_house_signal_helpers_use_boolean_plugin_trace(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    entry = _entry({})
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("binary_sensor.relax_mode", "on")
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    trace = coordinator.engine.diagnostics()["house_signals"]["trace"]["relax_mode"]
+    assert trace["plugin_id"] == "builtin.any_of"
+    assert trace["used_plugin_fallback"] is False
+    assert trace["fused_observation"]["state"] == "on"
