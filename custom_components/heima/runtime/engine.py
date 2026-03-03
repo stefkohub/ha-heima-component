@@ -48,6 +48,7 @@ from .normalization.service import InputNormalizer
 from .notifications import HeimaEventPipeline
 from .policy import resolve_house_state
 from .snapshot import DecisionSnapshot
+from .scheduler import ScheduledRuntimeJob
 from .state_store import CanonicalState
 
 _LOGGER = logging.getLogger(__name__)
@@ -110,7 +111,7 @@ class HeimaEngine:
         self._occupancy_room_trace: dict[str, dict[str, Any]] = {}
         self._group_presence_trace: dict[str, dict[str, Any]] = {}
         self._house_signals_trace: dict[str, dict[str, Any]] = {}
-        self._next_timed_recheck_at: float | None = None
+        self._timed_rechecks: dict[str, dict[str, Any]] = {}
         self._security_observation_trace: dict[str, Any] = {}
         self._security_corroboration_trace: dict[str, Any] = {}
         self._security_armed_away_but_home_since: float | None = None
@@ -280,7 +281,7 @@ class HeimaEngine:
     def _compute_snapshot(self, reason: str) -> DecisionSnapshot:
         options = dict(self._entry.options)
         now = datetime.now(timezone.utc).isoformat()
-        self._next_timed_recheck_at = None
+        self._timed_rechecks = {}
 
         named_people = options.get(OPT_PEOPLE_NAMED, [])
         home_people: list[str] = []
@@ -462,15 +463,47 @@ class HeimaEngine:
             notes=f"reason={reason}",
         )
 
-    def next_dwell_recheck_delay_s(self) -> float | None:
-        """Return seconds until next timed recheck should be evaluated."""
-        if self._next_timed_recheck_at is None:
-            return None
-        return max(0.0, self._next_timed_recheck_at - time.monotonic())
+    def scheduled_runtime_jobs(self) -> dict[str, ScheduledRuntimeJob]:
+        jobs: dict[str, ScheduledRuntimeJob] = {}
+        entry_id = str(getattr(self._entry, "entry_id", ""))
+        for job_id, spec in self._timed_rechecks.items():
+            jobs[job_id] = ScheduledRuntimeJob(
+                job_id=job_id,
+                owner=str(spec.get("owner", "runtime")),
+                entry_id=entry_id,
+                due_monotonic=float(spec["due_monotonic"]),
+                label=str(spec.get("label", job_id)),
+            )
+        return jobs
 
-    def _schedule_timed_recheck_deadline(self, deadline: float) -> None:
-        if self._next_timed_recheck_at is None or deadline < self._next_timed_recheck_at:
-            self._next_timed_recheck_at = deadline
+    def next_dwell_recheck_delay_s(self) -> float | None:
+        """Return seconds until the earliest scheduled runtime recheck.
+
+        Kept as a thin compatibility helper while tests and callers migrate to
+        the explicit scheduler model.
+        """
+        jobs = self.scheduled_runtime_jobs()
+        if not jobs:
+            return None
+        next_due = min(job.due_monotonic for job in jobs.values())
+        return max(0.0, next_due - time.monotonic())
+
+    def _schedule_timed_recheck_deadline(
+        self,
+        *,
+        job_id: str,
+        deadline: float,
+        owner: str,
+        label: str,
+    ) -> None:
+        current = self._timed_rechecks.get(job_id)
+        if current is not None and float(current["due_monotonic"]) <= deadline:
+            return
+        self._timed_rechecks[job_id] = {
+            "owner": owner,
+            "label": label,
+            "due_monotonic": deadline,
+        }
 
     def _compute_heating_runtime(self, *, house_state: str) -> None:
         heating_cfg = dict(self._entry.options.get(OPT_HEATING, {}))
@@ -615,6 +648,11 @@ class HeimaEngine:
             apply_allowed=apply_allowed,
             skip_small_delta=skip_small_delta,
         )
+        self._schedule_heating_recheck(
+            selected_branch=branch_type,
+            phase=phase,
+            vacation_meta=vacation_meta,
+        )
 
     def _queue_heating_runtime_events(
         self,
@@ -712,6 +750,49 @@ class HeimaEngine:
                     context={"branch": selected_branch},
                 )
             )
+
+    def _schedule_heating_recheck(
+        self,
+        *,
+        selected_branch: str,
+        phase: str,
+        vacation_meta: dict[str, Any],
+    ) -> None:
+        if selected_branch != "vacation_curve" or not vacation_meta:
+            return
+
+        delay_s = self._heating_vacation_recheck_delay_s(phase=phase, vacation_meta=vacation_meta)
+        if delay_s is None:
+            return
+        self._schedule_timed_recheck_deadline(
+            job_id="heating:vacation_curve",
+            deadline=time.monotonic() + delay_s,
+            owner="heating",
+            label="Heating vacation curve recheck",
+        )
+
+    @staticmethod
+    def _heating_vacation_recheck_delay_s(*, phase: str, vacation_meta: dict[str, Any]) -> float | None:
+        phase_boundary_candidates: list[float] = []
+        if phase == "ramp_down":
+            remaining_h = float(vacation_meta["ramp_down_h"]) - float(vacation_meta["hours_from_start"])
+            if remaining_h > 0:
+                phase_boundary_candidates.append(remaining_h * 3600)
+            phase_boundary_candidates.append(15 * 60)
+        elif phase == "cruise":
+            remaining_h = float(vacation_meta["hours_to_end"]) - float(vacation_meta["ramp_up_h"])
+            if remaining_h > 0:
+                phase_boundary_candidates.append(remaining_h * 3600)
+        elif phase == "ramp_up":
+            remaining_h = float(vacation_meta["hours_to_end"])
+            if remaining_h > 0:
+                phase_boundary_candidates.append(remaining_h * 3600)
+            phase_boundary_candidates.append(15 * 60)
+
+        if not phase_boundary_candidates:
+            return None
+        delay_s = min(candidate for candidate in phase_boundary_candidates if candidate > 0)
+        return max(1.0, float(delay_s))
 
     def _finalize_heating_target(
         self,
@@ -1567,7 +1648,12 @@ class HeimaEngine:
             if persist_s <= 0 or (now - self._occupancy_home_no_room_since) >= persist_s:
                 self._occupancy_home_no_room_emitted = True
                 return True
-            self._schedule_timed_recheck_deadline(self._occupancy_home_no_room_since + persist_s)
+            self._schedule_timed_recheck_deadline(
+                job_id="occupancy:home_no_room",
+                deadline=self._occupancy_home_no_room_since + persist_s,
+                owner="occupancy",
+                label="Occupancy home-no-room persistence",
+            )
             return False
 
         if key.startswith("room_no_home:"):
@@ -1583,7 +1669,12 @@ class HeimaEngine:
             if persist_s <= 0 or (now - self._occupancy_room_no_home_since[room_id]) >= persist_s:
                 self._occupancy_room_no_home_emitted.add(room_id)
                 return True
-            self._schedule_timed_recheck_deadline(self._occupancy_room_no_home_since[room_id] + persist_s)
+            self._schedule_timed_recheck_deadline(
+                job_id=f"occupancy:room_no_home:{room_id}",
+                deadline=self._occupancy_room_no_home_since[room_id] + persist_s,
+                owner="occupancy",
+                label=f"Occupancy room-no-home persistence ({room_id})",
+            )
             return False
 
         return False
@@ -1606,7 +1697,12 @@ class HeimaEngine:
         if persist_s <= 0 or (now - self._security_armed_away_but_home_since) >= persist_s:
             self._security_armed_away_but_home_emitted = True
             return True
-        self._schedule_timed_recheck_deadline(self._security_armed_away_but_home_since + persist_s)
+        self._schedule_timed_recheck_deadline(
+            job_id="security:armed_away_but_home",
+            deadline=self._security_armed_away_but_home_since + persist_s,
+            owner="security",
+            label="Security armed-away-but-home persistence",
+        )
         return False
 
     def _event_category(self, event_type: str) -> str:
@@ -1879,7 +1975,12 @@ class HeimaEngine:
                 self._occupancy_room_effective_since[room_id] = now
             elif dwell > 0:
                 deadline = candidate_since + dwell
-                self._schedule_timed_recheck_deadline(deadline)
+                self._schedule_timed_recheck_deadline(
+                    job_id=f"occupancy:dwell:{room_id}",
+                    deadline=deadline,
+                    owner="occupancy",
+                    label=f"Occupancy dwell transition ({room_id})",
+                )
 
         forced_off_by_max_on = False
         effective_since = self._occupancy_room_effective_since.get(room_id, now)
@@ -1898,6 +1999,13 @@ class HeimaEngine:
                         message=f"Room '{room_id}' occupancy forced off after max_on_s timeout.",
                         context={"room": room_id, "max_on_s": max_on_s},
                     )
+                )
+            else:
+                self._schedule_timed_recheck_deadline(
+                    job_id=f"occupancy:max_on:{room_id}",
+                    deadline=effective_since + max_on_s,
+                    owner="occupancy",
+                    label=f"Occupancy max_on timeout ({room_id})",
                 )
         effective_since = self._occupancy_room_effective_since.get(room_id, now)
 

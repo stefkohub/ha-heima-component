@@ -8,6 +8,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.heima.const import DOMAIN
 from custom_components.heima.runtime.normalization import InputNormalizer, NormalizationFusionRegistry
+from custom_components.heima.runtime.engine import HeimaEngine
 
 
 def _entry(options: dict) -> MockConfigEntry:
@@ -686,3 +687,68 @@ async def test_e2e_heating_manual_hold_blocks_fixed_target_apply(
     assert len(calls) == 1
     # Check the canonical event sensor as the stable integration-level observable.
     assert hass.states.get("sensor.heima_last_event").state == "heating.manual_override_blocked"
+
+
+@pytest.mark.asyncio
+async def test_e2e_heating_vacation_curve_registers_and_fires_scheduler_recheck(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+    monkeypatch,
+):
+    original_delay_fn = HeimaEngine._heating_vacation_recheck_delay_s
+    monkeypatch.setattr(
+        HeimaEngine,
+        "_heating_vacation_recheck_delay_s",
+        staticmethod(lambda **kwargs: 0.2),
+    )
+
+    entry = _entry(
+        {
+            "heating": {
+                "climate_entity": "climate.test_thermostat",
+                "apply_mode": "set_temperature",
+                "temperature_step": 0.5,
+                "manual_override_guard": True,
+                "outdoor_temperature_entity": "sensor.outdoor_temp",
+                "vacation_hours_from_start_entity": "sensor.vacation_from",
+                "vacation_hours_to_end_entity": "sensor.vacation_to",
+                "vacation_total_hours_entity": "sensor.vacation_total",
+                "vacation_is_long_entity": "binary_sensor.vacation_long",
+                "override_branches": {
+                    "vacation": {
+                        "branch": "vacation_curve",
+                        "vacation_ramp_down_h": 8.0,
+                        "vacation_ramp_up_h": 10.0,
+                        "vacation_min_temp": 16.5,
+                        "vacation_comfort_temp": 19.5,
+                        "vacation_start_temp": 19.5,
+                        "vacation_min_total_hours_for_ramp": 24.0,
+                    }
+                },
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("input_boolean.vacation_mode", "on")
+    hass.states.async_set("climate.test_thermostat", "heat", {"temperature": 18.0})
+    hass.states.async_set("sensor.outdoor_temp", "5.0")
+    hass.states.async_set("sensor.vacation_from", "2.0")
+    hass.states.async_set("sensor.vacation_to", "30.0")
+    hass.states.async_set("sensor.vacation_total", "32.0")
+    hass.states.async_set("binary_sensor.vacation_long", "on")
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    pending = coordinator.scheduler.diagnostics()["pending_jobs"]
+    assert any(job["job_id"] == "heating:vacation_curve" for job in pending)
+
+    await asyncio.sleep(0.3)
+    await hass.async_block_till_done()
+
+    assert coordinator.data.last_decision == "evaluation_requested:scheduler:heating:vacation_curve"
+    repending = coordinator.scheduler.diagnostics()["pending_jobs"]
+    assert any(job["job_id"] == "heating:vacation_curve" for job in repending)

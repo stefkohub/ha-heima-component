@@ -331,6 +331,25 @@ The computed target is quantized to the thermostat step:
 
 This is required to avoid impossible or noisy setpoints.
 
+### 6.7 Timed Re-Evaluation
+
+`vacation_curve` is a time-driven branch.
+
+Therefore, it must not rely only on the refresh cadence of:
+- `vacation_hours_from_start_entity`
+- `vacation_hours_to_end_entity`
+- `vacation_total_hours_entity`
+
+Heating v1 must use the shared Runtime Scheduler (see `heima_runtime_scheduler_spec_v1.md`) to request internal re-evaluation while `vacation_curve` is active.
+
+The scheduler must be used to compute the next meaningful check time in a smart way.
+
+The preferred next-check deadlines are:
+- the next phase boundary, or
+- the next moment when the quantized target could change
+
+If exact quantized-step timing is not yet derivable, a conservative bounded interval may be used temporarily, but blind tight polling is explicitly out of scope.
+
 ---
 
 ## 7. Apply Guard Rules
