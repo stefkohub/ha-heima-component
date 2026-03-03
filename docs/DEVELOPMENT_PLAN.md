@@ -21,6 +21,13 @@ Heima e una integrazione custom per Home Assistant che fornisce un motore di pol
 3. Milestone 2 - Heating Safe Engine
 4. Milestone 1.1 - Behavior Framework v1
 
+## Stato Milestone (aggiornato)
+- Milestone 0: raggiunta.
+- Milestone 1: sostanzialmente raggiunta per il perimetro MVP portabile (people, anonymous, occupancy, house_state, lighting, notification pipeline base, diagnostica principale).
+- Milestone 2: non ancora implementata; Heating e ancora in fase di design/spec e non ha un runtime applicativo reale.
+- Milestone 1.1: non ancora implementata; il Behavior Framework resta pianificato.
+- Cross-cut Normalization Layer: rollout avanzato e gia integrato nei path runtime principali; il framework e ormai oltre lo stato sperimentale.
+
 ## Milestone 0 - Scaffolding e Contratto Entita
 - Inizializzare struttura integrazione.
 - Creare manifest, const, setup/unload entry, logger e diagnostics stub.
@@ -90,6 +97,14 @@ Output:
   - zone occupancy calcolata ignorando room non sensorizzate
   - input normalization layer plugin-first introdotto e usato nei path principali (occupancy, people quorum, house signals, security)
   - occupancy plugin-first con dwell/max_on operativo e `weighted_quorum` disponibile
+  - plugin layer esteso oltre la presenza:
+    - corroborazione security (`boolean_signal`)
+    - composizione house helper (`boolean_signal`)
+  - contratti riusabili di strategia (`SignalSetStrategyContract`) introdotti per:
+    - group presence
+    - room occupancy
+    - security corroboration
+    - house signals
   - heating ancora stub (solo entita/config)
 
 ### 4. Orchestratore e Apply
@@ -127,9 +142,42 @@ Output:
     - `presence.group_trace`
     - `occupancy.room_trace`
     - `security.observation_trace`
+    - `security.corroboration_trace`
+    - `house_signals.trace`
 
 ### 8. Localizzazione
 - Traduzioni base en/it per labels e errori.
+
+### 9. Heating Domain (implementation track)
+- H4.1 Domain Foundation
+  - bind `climate_entity`
+  - creare entita canoniche heating reali
+  - aggiungere diagnostica base heating
+- H4.2 Safe Apply Path
+  - leggere setpoint corrente
+  - guard `small_delta`
+  - rate limit / idempotenza
+  - manual override guard
+  - prime emissioni `heating.apply_skipped_small_delta` / `heating.manual_override_blocked`
+- H4.3 Vacation Timing Bindings
+  - collegare sensori/helper per:
+    - `hours_from_start`
+    - `hours_to_end`
+    - `total_hours`
+    - `is_long`
+    - `outdoor_temperature`
+- H4.4 Vacation Curve Policy Branch
+  - implementare `eco_only`, `ramp_down`, `cruise`, `ramp_up`
+  - safety floor da temperatura esterna
+  - quantizzazione sul passo termostato
+- H4.5 Normal Branch Semantics
+  - rendere esplicito il comportamento scheduler-following fuori da `vacation`
+- H4.6 Events and Observability
+  - introdurre eventi heating iniziali e trace diagnostico strutturato
+- H4.7 Automated Tests
+  - unit test policy curve
+  - runtime test branch/apply guard
+  - HA e2e test con `ConfigEntry`
 
 ## Modello Dati (Sintesi)
 - People: binary_sensor, sensor confidence, source, override.
@@ -155,8 +203,10 @@ Output:
     - people quorum
     - anonymous presence
     - fail-safe fallback path
+    - security corroboration trace
+    - house helper signal trace
   - coperti regression bug principali (selector clear, lighting conflicts, notify pipeline)
-  - suite locale: `82 passed`
+  - suite locale: `99 passed`
 
 ## Rischi e Mitigazioni
 - Config incoerente: validazioni strette + eventi system.config_invalid.
@@ -165,7 +215,12 @@ Output:
 
 ## Prossimi Passi Operativi
 1. Completare `Phase 3`: espandere Event Catalog e standardizzare payload/eventi per domini.
-2. Implementare `Phase 4` Heating safe engine (apply modes, guard, verify/retry, rate limit).
-3. Rafforzare lighting con policy conflitti zone-room configurabile (`first_wins/priority`).
-4. Valutare chiusura o ulteriore espansione di `N5` (provider esterni / plugin piu generici) dopo il merge del branch `normalisation`.
-5. Integrare Behavior Framework v1.1.
+2. Implementare `Phase 4` Heating partendo da:
+   - H4.1 Domain Foundation
+   - H4.2 Safe Apply Path
+3. Completare il ramo Heating con:
+   - H4.3 Vacation Timing Bindings
+   - H4.4 Vacation Curve Policy Branch
+4. Rafforzare lighting con policy conflitti zone-room configurabile (`first_wins/priority`).
+5. Definire una mini-spec futura per policy pluggable cross-domain, senza introdurre ancora plugin di policy nel runtime.
+6. Integrare Behavior Framework v1.1.
