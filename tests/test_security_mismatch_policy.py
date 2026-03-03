@@ -97,6 +97,10 @@ async def test_security_mismatch_smart_suppresses_without_corroboration(monkeypa
     await _eval(engine)
 
     assert "security.armed_away_but_home" not in _event_types(engine)
+    trace = engine.diagnostics()["security"]["corroboration_trace"]
+    assert trace["plugin_id"] == "builtin.any_of"
+    assert trace["fused_observation"]["state"] == "off"
+    assert trace["used_plugin_fallback"] is False
 
 
 @pytest.mark.asyncio
@@ -120,6 +124,9 @@ async def test_security_mismatch_smart_requires_persistence_with_corroboration(m
 
     await _eval(engine)
     assert "security.armed_away_but_home" not in _event_types(engine)
+    trace = engine.diagnostics()["security"]["corroboration_trace"]
+    assert trace["plugin_id"] == "builtin.any_of"
+    assert trace["fused_observation"]["state"] == "on"
     delay = engine.next_dwell_recheck_delay_s()
     assert delay is not None and delay > 0
 

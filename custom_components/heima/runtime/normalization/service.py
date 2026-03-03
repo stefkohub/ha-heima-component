@@ -172,6 +172,24 @@ class InputNormalizer:
             reason="default_off",
         )
 
+    def boolean_value(
+        self,
+        value: bool,
+        *,
+        source_key: str,
+        reason: str,
+        confidence: int = 100,
+    ) -> NormalizedObservation:
+        """Create a normalized boolean observation from a runtime-derived fact."""
+        return build_observation(
+            kind="boolean_signal",
+            state="on" if bool(value) else "off",
+            confidence=confidence,
+            raw_state="on" if bool(value) else "off",
+            source_entity_id=source_key,
+            reason=reason,
+        )
+
     def security(self, entity_id: str | None, mapping_cfg: dict[str, Any] | None = None) -> NormalizedObservation:
         mapping_cfg = dict(mapping_cfg or {})
         raw = self._read_state(entity_id)

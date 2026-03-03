@@ -6,7 +6,7 @@ from typing import Any
 
 
 WEIGHTED_QUORUM_STRATEGIES = {"weighted_quorum"}
-PRESENCE_PLUGIN_IDS = {
+SIGNAL_SET_PLUGIN_IDS = {
     "any_of": "builtin.any_of",
     "all_of": "builtin.all_of",
     "quorum": "builtin.quorum",
@@ -78,7 +78,7 @@ def normalize_source_weights(value: Any) -> dict[str, float]:
     return result
 
 
-def build_presence_strategy_cfg(
+def build_signal_set_strategy_cfg(
     *,
     strategy: str,
     required: int | None = None,
@@ -86,9 +86,9 @@ def build_presence_strategy_cfg(
     source_weights: Any = None,
     fallback_state: str = "off",
 ) -> dict[str, Any]:
-    """Build shared runtime strategy config for presence-like fusion."""
+    """Build shared runtime strategy config for on/off/unknown signal-set fusion."""
     normalized_strategy = str(strategy or "quorum")
-    plugin_id = PRESENCE_PLUGIN_IDS.get(normalized_strategy, PRESENCE_PLUGIN_IDS["quorum"])
+    plugin_id = SIGNAL_SET_PLUGIN_IDS.get(normalized_strategy, SIGNAL_SET_PLUGIN_IDS["quorum"])
     cfg: dict[str, Any] = {
         "plugin_id": plugin_id,
         "fallback_state": str(fallback_state or "off"),

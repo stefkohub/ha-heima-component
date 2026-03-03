@@ -384,3 +384,60 @@ async def test_e2e_room_occupancy_plugin_failure_uses_fail_safe_off_fallback(
     assert trace["fused_observation"]["state"] == "off"
     assert trace["fused_observation"]["reason"] == "plugin_error_fallback"
     assert trace["fused_observation"]["evidence"]["fallback"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_e2e_security_smart_uses_boolean_plugin_corroboration_trace(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    entry = _entry(
+        {
+            "people_named": [
+                {
+                    "slug": "stefano",
+                    "presence_method": "manual",
+                    "enable_override": True,
+                }
+            ],
+            "rooms": [
+                {
+                    "room_id": "studio",
+                    "occupancy_mode": "derived",
+                    "sources": ["binary_sensor.room_presence"],
+                    "logic": "any_of",
+                    "on_dwell_s": 0,
+                    "off_dwell_s": 0,
+                }
+            ],
+            "security": {
+                "enabled": True,
+                "security_state_entity": "alarm_control_panel.home",
+                "armed_away_value": "armed_away",
+                "armed_home_value": "armed_home",
+            },
+            "notifications": {
+                "enabled_event_categories": ["security", "people"],
+                "security_mismatch_policy": "smart",
+                "security_mismatch_persist_s": 0,
+            },
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("alarm_control_panel.home", "armed_away")
+    hass.states.async_set("binary_sensor.room_presence", "on")
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    coordinator.engine.state.set_select("heima_person_stefano_override", "force_home")
+    await coordinator.async_request_evaluation(reason="test:security_corroboration")
+    await hass.async_block_till_done()
+
+    trace = coordinator.engine.diagnostics()["security"]["corroboration_trace"]
+    assert trace["plugin_id"] == "builtin.any_of"
+    assert trace["used_plugin_fallback"] is False
+    assert trace["fused_observation"]["state"] == "on"

@@ -51,6 +51,10 @@
 - [x] N5 Plugin Ecosystem Expansion: `builtin.weighted_quorum` added, wired into room occupancy, with configurable threshold and per-source weights.
 - [x] N5 Plugin Hardening: deterministic plugin failure fallback (`unknown|off|on`), global normalizer diagnostics, and local fallback trace in occupancy/presence runtime traces.
 - [x] N5 Verification: HA end-to-end tests cover occupancy dwell, weighted quorum, people quorum, anonymous presence, and fail-safe fallback paths.
+- [ ] N5 Broadening: move beyond presence-only runtime adoption and apply the plugin layer to non-presence signal families.
+- [ ] N5 Broadening Step 1: introduce shared non-presence boolean-signal strategy config and use plugin-driven corroboration in security mismatch logic.
+- [ ] N5 Broadening Step 2: move house-mode helper composition to shared non-presence strategy paths instead of ad hoc boolean checks.
+- [ ] N5 Broadening Step 3: expose reusable strategy configuration contracts for additional non-presence domains (security, house state, future constraints/heating).
 
 6. [ ] Phase 4 — Heating Domain (Safe Apply)
 - Implement base intents (`auto`, `eco`, `comfort`, `preheat`, `off`).

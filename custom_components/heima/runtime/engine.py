@@ -36,7 +36,7 @@ from ..entities.registry import build_registry
 from ..models import HeimaOptions
 from .contracts import ApplyPlan, ApplyStep, HeimaEvent
 from .lighting import pick_scene_for_intent_with_trace, resolve_zone_intent
-from .normalization.config import build_presence_strategy_cfg
+from .normalization.config import build_signal_set_strategy_cfg
 from .normalization.service import InputNormalizer
 from .notifications import HeimaEventPipeline
 from .policy import resolve_house_state
@@ -98,6 +98,7 @@ class HeimaEngine:
         self._group_presence_trace: dict[str, dict[str, Any]] = {}
         self._next_timed_recheck_at: float | None = None
         self._security_observation_trace: dict[str, Any] = {}
+        self._security_corroboration_trace: dict[str, Any] = {}
         self._security_armed_away_but_home_since: float | None = None
         self._security_armed_away_but_home_emitted: bool = False
 
@@ -913,8 +914,35 @@ class HeimaEngine:
             for room_id in occupied_rooms
         )
         has_anonymous_evidence = bool(self._state.get_binary("heima_anonymous_presence"))
+        corroboration_inputs = [
+            self._normalizer.boolean_value(
+                has_room_evidence,
+                source_key="security:derived_room_evidence",
+                reason="derived_room_occupied" if has_room_evidence else "no_derived_room_occupied",
+            ),
+            self._normalizer.boolean_value(
+                has_anonymous_evidence,
+                source_key="security:anonymous_presence_evidence",
+                reason="anonymous_presence_on" if has_anonymous_evidence else "anonymous_presence_off",
+            ),
+        ]
+        corroboration = self._normalizer.derive(
+            kind="boolean_signal",
+            inputs=corroboration_inputs,
+            strategy_cfg=build_signal_set_strategy_cfg(
+                strategy="any_of",
+                fallback_state="off",
+            ),
+            context={"source": "security_corroboration"},
+        )
+        self._security_corroboration_trace = {
+            "source_observations": [obs.as_dict() for obs in corroboration_inputs],
+            "fused_observation": corroboration.as_dict(),
+            "plugin_id": corroboration.plugin_id,
+            "used_plugin_fallback": corroboration.reason == "plugin_error_fallback",
+        }
         if policy == "smart":
-            mismatch_active = mismatch_active and (has_room_evidence or has_anonymous_evidence)
+            mismatch_active = mismatch_active and corroboration.state == "on"
 
         if self._persistent_security_mismatch_ready(active=mismatch_active, persist_s=persist_s):
             self._queue_event(
@@ -1190,7 +1218,7 @@ class HeimaEngine:
         observations = [self._normalizer.presence(entity_id) for entity_id in sources]
         active_count = sum(1 for obs in observations if obs.state == "on")
         group_strategy = str(strategy or "quorum")
-        strategy_cfg = build_presence_strategy_cfg(
+        strategy_cfg = build_signal_set_strategy_cfg(
             strategy=group_strategy,
             required=int(required),
             weight_threshold=weight_threshold,
@@ -1263,7 +1291,7 @@ class HeimaEngine:
 
         logic = str(room_cfg.get("logic", "any_of"))
         observations = [self._normalizer.presence(entity_id) for entity_id in sources]
-        strategy_cfg = build_presence_strategy_cfg(
+        strategy_cfg = build_signal_set_strategy_cfg(
             strategy=logic,
             weight_threshold=room_cfg.get("weight_threshold"),
             source_weights=room_cfg.get("source_weights"),
@@ -1423,6 +1451,7 @@ class HeimaEngine:
             },
             "security": {
                 "observation_trace": dict(self._security_observation_trace),
+                "corroboration_trace": dict(self._security_corroboration_trace),
             },
             "normalization": self._normalizer.diagnostics(),
         }
