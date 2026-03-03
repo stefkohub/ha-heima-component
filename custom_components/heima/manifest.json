@@ -1,7 +1,7 @@
 {
   "domain": "heima",
   "name": "Heima",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "documentation": "https://github.com/StefanoIOD/ha-heima-component",
   "issue_tracker": "https://github.com/StefanoIOD/ha-heima-component/issues",
   "codeowners": [
