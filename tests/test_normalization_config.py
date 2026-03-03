@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from custom_components.heima.runtime.normalization.config import (
-    build_group_presence_strategy_cfg,
+    build_presence_strategy_cfg,
     normalize_source_weights,
     normalize_weighted_fusion_fields,
     validate_weighted_fusion_fields,
@@ -48,8 +48,8 @@ def test_validate_weighted_fusion_fields_rejects_unknown_weight_sources():
     assert errors == {"source_weights": "invalid_mapping"}
 
 
-def test_build_group_presence_strategy_cfg_for_weighted_quorum():
-    cfg = build_group_presence_strategy_cfg(
+def test_build_presence_strategy_cfg_for_weighted_quorum():
+    cfg = build_presence_strategy_cfg(
         strategy="weighted_quorum",
         required=1,
         weight_threshold=1.2,
@@ -68,4 +68,16 @@ def test_build_group_presence_strategy_cfg_for_weighted_quorum():
             "binary_sensor.a": 0.8,
             "binary_sensor.b": 0.4,
         },
+    }
+
+
+def test_build_presence_strategy_cfg_for_all_of():
+    cfg = build_presence_strategy_cfg(
+        strategy="all_of",
+        fallback_state="off",
+    )
+
+    assert cfg == {
+        "plugin_id": "builtin.all_of",
+        "fallback_state": "off",
     }

@@ -6,6 +6,12 @@ from typing import Any
 
 
 WEIGHTED_QUORUM_STRATEGIES = {"weighted_quorum"}
+PRESENCE_PLUGIN_IDS = {
+    "any_of": "builtin.any_of",
+    "all_of": "builtin.all_of",
+    "quorum": "builtin.quorum",
+    "weighted_quorum": "builtin.weighted_quorum",
+}
 
 
 def normalize_weighted_fusion_fields(
@@ -72,24 +78,24 @@ def normalize_source_weights(value: Any) -> dict[str, float]:
     return result
 
 
-def build_group_presence_strategy_cfg(
+def build_presence_strategy_cfg(
     *,
     strategy: str,
-    required: int,
+    required: int | None = None,
     weight_threshold: Any = None,
     source_weights: Any = None,
     fallback_state: str = "off",
 ) -> dict[str, Any]:
-    """Build shared runtime strategy config for group presence fusion."""
+    """Build shared runtime strategy config for presence-like fusion."""
     normalized_strategy = str(strategy or "quorum")
-    plugin_id = "builtin.weighted_quorum" if normalized_strategy == "weighted_quorum" else "builtin.quorum"
+    plugin_id = PRESENCE_PLUGIN_IDS.get(normalized_strategy, PRESENCE_PLUGIN_IDS["quorum"])
     cfg: dict[str, Any] = {
         "plugin_id": plugin_id,
         "fallback_state": str(fallback_state or "off"),
     }
-    if plugin_id == "builtin.quorum":
+    if plugin_id == "builtin.quorum" and required is not None:
         cfg["required"] = int(required)
-    elif weight_threshold not in (None, ""):
+    elif plugin_id == "builtin.weighted_quorum" and weight_threshold not in (None, ""):
         cfg["threshold"] = float(weight_threshold)
     if plugin_id == "builtin.weighted_quorum" and isinstance(source_weights, dict):
         cfg["weights"] = {

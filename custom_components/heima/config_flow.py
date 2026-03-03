@@ -44,7 +44,6 @@ from .const import (
     OPT_SECURITY,
 )
 from .runtime.normalization.config import (
-    normalize_source_weights,
     normalize_weighted_fusion_fields,
     validate_weighted_fusion_fields,
 )
@@ -222,25 +221,12 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         if occupancy_mode not in ROOM_OCCUPANCY_MODES:
             occupancy_mode = "derived"
         data["occupancy_mode"] = occupancy_mode
-        logic = str(data.get("logic", "any_of") or "any_of").strip()
-        if logic not in ROOM_LOGIC:
-            logic = "any_of"
-        data["logic"] = logic
-        if logic != "weighted_quorum":
-            data.pop("weight_threshold", None)
-            data.pop("source_weights", None)
-            return data
-
-        if data.get("weight_threshold") in ("", None):
-            data.pop("weight_threshold", None)
-        elif "weight_threshold" in data:
-            data["weight_threshold"] = float(data["weight_threshold"])
-
-        source_weights = normalize_source_weights(data.get("source_weights"))
-        if source_weights:
-            data["source_weights"] = source_weights
-        else:
-            data.pop("source_weights", None)
+        normalize_weighted_fusion_fields(
+            data,
+            strategy_key="logic",
+            allowed_strategies=ROOM_LOGIC,
+            default_strategy="any_of",
+        )
         return data
 
     def _normalize_lighting_room_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -761,35 +747,13 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         sources = payload.get("sources", [])
         if occupancy_mode == "derived" and not sources:
             errors["sources"] = "required"
-        if payload.get("logic") == "weighted_quorum":
-            if "weight_threshold" in payload:
-                try:
-                    threshold = float(payload.get("weight_threshold"))
-                except (TypeError, ValueError):
-                    errors["weight_threshold"] = "invalid_number"
-                else:
-                    if threshold <= 0:
-                        errors["weight_threshold"] = "invalid_number"
-
-            source_weights = payload.get("source_weights", {})
-            if not isinstance(source_weights, dict):
-                errors["source_weights"] = "invalid_format"
-            else:
-                invalid_source_weights = False
-                source_ids = {str(source) for source in sources}
-                for entity_id, weight in source_weights.items():
-                    if str(entity_id) not in source_ids:
-                        invalid_source_weights = True
-                        break
-                    try:
-                        if float(weight) <= 0:
-                            invalid_source_weights = True
-                            break
-                    except (TypeError, ValueError):
-                        invalid_source_weights = True
-                        break
-                if invalid_source_weights:
-                    errors["source_weights"] = "invalid_mapping"
+        errors.update(
+            validate_weighted_fusion_fields(
+                payload=payload,
+                strategy_key="logic",
+                sources=sources,
+            )
+        )
         return errors
 
     # ---- Lighting: per-room scenes ----

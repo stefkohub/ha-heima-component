@@ -36,7 +36,7 @@ from ..entities.registry import build_registry
 from ..models import HeimaOptions
 from .contracts import ApplyPlan, ApplyStep, HeimaEvent
 from .lighting import pick_scene_for_intent_with_trace, resolve_zone_intent
-from .normalization.config import build_group_presence_strategy_cfg
+from .normalization.config import build_presence_strategy_cfg
 from .normalization.service import InputNormalizer
 from .notifications import HeimaEventPipeline
 from .policy import resolve_house_state
@@ -1190,7 +1190,7 @@ class HeimaEngine:
         observations = [self._normalizer.presence(entity_id) for entity_id in sources]
         active_count = sum(1 for obs in observations if obs.state == "on")
         group_strategy = str(strategy or "quorum")
-        strategy_cfg = build_group_presence_strategy_cfg(
+        strategy_cfg = build_presence_strategy_cfg(
             strategy=group_strategy,
             required=int(required),
             weight_threshold=weight_threshold,
@@ -1262,24 +1262,13 @@ class HeimaEngine:
             }
 
         logic = str(room_cfg.get("logic", "any_of"))
-        if logic == "all_of":
-            plugin_id = "builtin.all_of"
-        elif logic == "weighted_quorum":
-            plugin_id = "builtin.weighted_quorum"
-        else:
-            plugin_id = "builtin.any_of"
-
         observations = [self._normalizer.presence(entity_id) for entity_id in sources]
-        strategy_cfg: dict[str, Any] = {"plugin_id": plugin_id}
-        strategy_cfg["fallback_state"] = "off"
-        if logic == "weighted_quorum" and room_cfg.get("weight_threshold") not in (None, ""):
-            strategy_cfg["threshold"] = float(room_cfg["weight_threshold"])
-        if logic == "weighted_quorum" and isinstance(room_cfg.get("source_weights"), dict):
-            strategy_cfg["weights"] = {
-                str(entity_id): float(weight)
-                for entity_id, weight in room_cfg["source_weights"].items()
-                if str(entity_id)
-            }
+        strategy_cfg = build_presence_strategy_cfg(
+            strategy=logic,
+            weight_threshold=room_cfg.get("weight_threshold"),
+            source_weights=room_cfg.get("source_weights"),
+            fallback_state="off",
+        )
         fused = self._normalizer.derive(
             kind="presence",
             inputs=observations,
