@@ -28,6 +28,9 @@ This folder contains the canonical, versioned specifications for the Heima Home 
 - **Mapping Model SPEC v1** — Lighting mapping (room→scenes, zone→rooms), holds, behavior clamps, fallback, idempotency  
   File: `heima_mapping_model_spec_v1.md`
 
+- **Heating Domain Mini-SPEC v1** — Scheduler-following baseline, fixed vacation override branch, apply guards, diagnostics  
+  File: `heima_domain_heating_spec_v1.md`
+
 - **Extension Strategy SPEC v1 (Solution A)** — Event bus + HA services interface for third-party extensions  
   File: `heima_extension_strategy_spec_v1_solution_a.md`
 
@@ -76,6 +79,7 @@ docs/
     heima_event_catalog_spec_v1.md
     heima_input_normalization_layer_spec_v1.md
     heima_mapping_model_spec_v1.md
+    heima_domain_heating_spec_v1.md
     heima_extension_strategy_spec_v1_solution_a.md
     INDEX.md
 ```
