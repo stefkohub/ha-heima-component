@@ -44,8 +44,10 @@ from .const import (
     OPT_SECURITY,
 )
 from .runtime.normalization.config import (
-    normalize_weighted_fusion_fields,
-    validate_weighted_fusion_fields,
+    GROUP_PRESENCE_STRATEGY_CONTRACT,
+    ROOM_OCCUPANCY_STRATEGY_CONTRACT,
+    normalize_signal_set_strategy_fields,
+    validate_signal_set_strategy_fields,
 )
 
 PRESENCE_METHODS = ["ha_person", "quorum", "manual"]
@@ -191,22 +193,20 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         if data.get("person_entity"):
             data["person_entity"] = str(data["person_entity"])
         data["sources"] = self._normalize_multi_value(data.get("sources"))
-        normalize_weighted_fusion_fields(
+        normalize_signal_set_strategy_fields(
             data,
             strategy_key="group_strategy",
-            allowed_strategies=PEOPLE_GROUP_LOGIC,
-            default_strategy="quorum",
+            contract=GROUP_PRESENCE_STRATEGY_CONTRACT,
         )
         return data
 
     def _normalize_people_anonymous_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         data = dict(payload)
         data["sources"] = self._normalize_multi_value(data.get("sources"))
-        normalize_weighted_fusion_fields(
+        normalize_signal_set_strategy_fields(
             data,
             strategy_key="group_strategy",
-            allowed_strategies=PEOPLE_GROUP_LOGIC,
-            default_strategy="quorum",
+            contract=GROUP_PRESENCE_STRATEGY_CONTRACT,
         )
         return data
 
@@ -221,11 +221,10 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         if occupancy_mode not in ROOM_OCCUPANCY_MODES:
             occupancy_mode = "derived"
         data["occupancy_mode"] = occupancy_mode
-        normalize_weighted_fusion_fields(
+        normalize_signal_set_strategy_fields(
             data,
             strategy_key="logic",
-            allowed_strategies=ROOM_LOGIC,
-            default_strategy="any_of",
+            contract=ROOM_OCCUPANCY_STRATEGY_CONTRACT,
         )
         return data
 
@@ -443,13 +442,14 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         elif user_input.get("group_strategy", "quorum") == "quorum" and sources and required > len(sources):
             errors["required"] = "invalid_required"
         elif user_input.get("group_strategy") == "weighted_quorum":
-            errors.update(
-                validate_weighted_fusion_fields(
-                    payload=user_input,
-                    strategy_key="group_strategy",
-                    sources=sources,
+                errors.update(
+                    validate_signal_set_strategy_fields(
+                        payload=user_input,
+                        strategy_key="group_strategy",
+                        sources=sources,
+                        contract=GROUP_PRESENCE_STRATEGY_CONTRACT,
+                    )
                 )
-            )
 
         if errors:
             return self.async_show_form(
@@ -555,10 +555,11 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 errors["required"] = "invalid_required"
             if payload.get("group_strategy") == "weighted_quorum":
                 errors.update(
-                    validate_weighted_fusion_fields(
+                    validate_signal_set_strategy_fields(
                         payload=payload,
                         strategy_key="group_strategy",
                         sources=sources,
+                        contract=GROUP_PRESENCE_STRATEGY_CONTRACT,
                     )
                 )
         return errors
@@ -748,10 +749,11 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         if occupancy_mode == "derived" and not sources:
             errors["sources"] = "required"
         errors.update(
-            validate_weighted_fusion_fields(
+            validate_signal_set_strategy_fields(
                 payload=payload,
                 strategy_key="logic",
                 sources=sources,
+                contract=ROOM_OCCUPANCY_STRATEGY_CONTRACT,
             )
         )
         return errors

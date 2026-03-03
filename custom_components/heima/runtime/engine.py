@@ -36,7 +36,13 @@ from ..entities.registry import build_registry
 from ..models import HeimaOptions
 from .contracts import ApplyPlan, ApplyStep, HeimaEvent
 from .lighting import pick_scene_for_intent_with_trace, resolve_zone_intent
-from .normalization.config import build_signal_set_strategy_cfg
+from .normalization.config import (
+    GROUP_PRESENCE_STRATEGY_CONTRACT,
+    HOUSE_SIGNAL_STRATEGY_CONTRACT,
+    ROOM_OCCUPANCY_STRATEGY_CONTRACT,
+    SECURITY_CORROBORATION_STRATEGY_CONTRACT,
+    build_signal_set_strategy_cfg_for_contract,
+)
 from .normalization.service import InputNormalizer
 from .notifications import HeimaEventPipeline
 from .policy import resolve_house_state
@@ -945,9 +951,8 @@ class HeimaEngine:
         corroboration = self._normalizer.derive(
             kind="boolean_signal",
             inputs=corroboration_inputs,
-            strategy_cfg=build_signal_set_strategy_cfg(
-                strategy="any_of",
-                fallback_state="off",
+            strategy_cfg=build_signal_set_strategy_cfg_for_contract(
+                contract=SECURITY_CORROBORATION_STRATEGY_CONTRACT,
             ),
             context={"source": "security_corroboration"},
         )
@@ -1234,7 +1239,8 @@ class HeimaEngine:
         observations = [self._normalizer.presence(entity_id) for entity_id in sources]
         active_count = sum(1 for obs in observations if obs.state == "on")
         group_strategy = str(strategy or "quorum")
-        strategy_cfg = build_signal_set_strategy_cfg(
+        strategy_cfg = build_signal_set_strategy_cfg_for_contract(
+            contract=GROUP_PRESENCE_STRATEGY_CONTRACT,
             strategy=group_strategy,
             required=int(required),
             weight_threshold=weight_threshold,
@@ -1272,9 +1278,8 @@ class HeimaEngine:
         fused = self._normalizer.derive(
             kind="boolean_signal",
             inputs=observations,
-            strategy_cfg=build_signal_set_strategy_cfg(
-                strategy="any_of",
-                fallback_state="off",
+            strategy_cfg=build_signal_set_strategy_cfg_for_contract(
+                contract=HOUSE_SIGNAL_STRATEGY_CONTRACT,
             ),
             context={"source": "house_signal", "signal": trace_key},
         )
@@ -1326,7 +1331,8 @@ class HeimaEngine:
 
         logic = str(room_cfg.get("logic", "any_of"))
         observations = [self._normalizer.presence(entity_id) for entity_id in sources]
-        strategy_cfg = build_signal_set_strategy_cfg(
+        strategy_cfg = build_signal_set_strategy_cfg_for_contract(
+            contract=ROOM_OCCUPANCY_STRATEGY_CONTRACT,
             strategy=logic,
             weight_threshold=room_cfg.get("weight_threshold"),
             source_weights=room_cfg.get("source_weights"),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -12,6 +13,74 @@ SIGNAL_SET_PLUGIN_IDS = {
     "quorum": "builtin.quorum",
     "weighted_quorum": "builtin.weighted_quorum",
 }
+
+
+@dataclass(frozen=True)
+class SignalSetStrategyContract:
+    """Reusable contract for a domain-specific signal-set strategy family."""
+
+    allowed_strategies: tuple[str, ...]
+    default_strategy: str
+    default_fallback_state: str = "off"
+
+
+GROUP_PRESENCE_STRATEGY_CONTRACT = SignalSetStrategyContract(
+    allowed_strategies=("quorum", "weighted_quorum"),
+    default_strategy="quorum",
+    default_fallback_state="off",
+)
+
+ROOM_OCCUPANCY_STRATEGY_CONTRACT = SignalSetStrategyContract(
+    allowed_strategies=("any_of", "all_of", "weighted_quorum"),
+    default_strategy="any_of",
+    default_fallback_state="off",
+)
+
+SECURITY_CORROBORATION_STRATEGY_CONTRACT = SignalSetStrategyContract(
+    allowed_strategies=("any_of", "all_of"),
+    default_strategy="any_of",
+    default_fallback_state="off",
+)
+
+HOUSE_SIGNAL_STRATEGY_CONTRACT = SignalSetStrategyContract(
+    allowed_strategies=("any_of", "all_of"),
+    default_strategy="any_of",
+    default_fallback_state="off",
+)
+
+
+def normalize_signal_set_strategy_fields(
+    data: dict[str, Any],
+    *,
+    strategy_key: str,
+    contract: SignalSetStrategyContract,
+) -> dict[str, Any]:
+    """Normalize strategy fields using a reusable strategy contract."""
+    return normalize_weighted_fusion_fields(
+        data,
+        strategy_key=strategy_key,
+        allowed_strategies=contract.allowed_strategies,
+        default_strategy=contract.default_strategy,
+    )
+
+
+def validate_signal_set_strategy_fields(
+    *,
+    payload: dict[str, Any],
+    strategy_key: str,
+    sources: list[str],
+    contract: SignalSetStrategyContract,
+) -> dict[str, str]:
+    """Validate strategy fields using a reusable strategy contract."""
+    strategy = str(payload.get(strategy_key, contract.default_strategy) or contract.default_strategy)
+    if strategy not in contract.allowed_strategies:
+        payload = dict(payload)
+        payload[strategy_key] = contract.default_strategy
+    return validate_weighted_fusion_fields(
+        payload=payload,
+        strategy_key=strategy_key,
+        sources=sources,
+    )
 
 
 def normalize_weighted_fusion_fields(
@@ -104,6 +173,28 @@ def build_signal_set_strategy_cfg(
             if str(entity_id)
         }
     return cfg
+
+
+def build_signal_set_strategy_cfg_for_contract(
+    *,
+    contract: SignalSetStrategyContract,
+    strategy: str | None = None,
+    required: int | None = None,
+    weight_threshold: Any = None,
+    source_weights: Any = None,
+    fallback_state: str | None = None,
+) -> dict[str, Any]:
+    """Build strategy config constrained by a reusable domain contract."""
+    effective_strategy = str(strategy or contract.default_strategy)
+    if effective_strategy not in contract.allowed_strategies:
+        effective_strategy = contract.default_strategy
+    return build_signal_set_strategy_cfg(
+        strategy=effective_strategy,
+        required=required,
+        weight_threshold=weight_threshold,
+        source_weights=source_weights,
+        fallback_state=fallback_state or contract.default_fallback_state,
+    )
 
 
 def validate_weighted_fusion_fields(
