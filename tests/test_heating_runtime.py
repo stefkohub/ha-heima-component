@@ -324,3 +324,41 @@ async def test_heating_runtime_emits_manual_override_blocked_event_once_per_tran
     payloads = [payload for event_type, payload in engine._hass.bus.events if event_type == "heima_event"]
     blocked = [payload for payload in payloads if payload["type"] == "heating.manual_override_blocked"]
     assert len(blocked) == 1
+
+
+def test_vacation_curve_without_required_bindings_is_inactive():
+    options = {
+        "heating": {
+            "climate_entity": "climate.test_thermostat",
+            "apply_mode": "set_temperature",
+            "temperature_step": 0.5,
+            "manual_override_guard": True,
+            "override_branches": {
+                "vacation": {
+                    "branch": "vacation_curve",
+                    "vacation_ramp_down_h": 8.0,
+                    "vacation_ramp_up_h": 10.0,
+                    "vacation_min_temp": 16.5,
+                    "vacation_comfort_temp": 19.5,
+                    "vacation_start_temp": 19.5,
+                    "vacation_min_total_hours_for_ramp": 24.0,
+                }
+            },
+        }
+    }
+    engine = _build_engine(
+        options,
+        {
+            "input_boolean.vacation_mode": "on",
+            "climate.test_thermostat": ("heat", {"temperature": 18.0}),
+        },
+    )
+
+    snapshot = engine._compute_snapshot(reason="test")
+    plan = engine._build_apply_plan(snapshot)
+
+    assert snapshot.house_state == "vacation"
+    assert engine.state.get_sensor("heima_heating_state") == "inactive"
+    assert engine.state.get_sensor("heima_heating_reason") == "vacation_bindings_unavailable"
+    assert engine.state.get_binary("heima_heating_applying_guard") is True
+    assert not any(step.domain == "heating" for step in plan.steps)

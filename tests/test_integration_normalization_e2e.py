@@ -591,3 +591,94 @@ async def test_e2e_heating_vacation_curve_branch_computes_and_applies_target(
     assert trace["selected_branch"] == "vacation_curve"
     assert trace["vacation"]["is_long"] is True
     assert trace["vacation"]["quantized_target"] == 19.0
+
+
+@pytest.mark.asyncio
+async def test_e2e_heating_fixed_target_small_delta_skips_apply_and_sets_guard(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    calls: list[dict[str, object]] = []
+
+    async def _capture_climate_call(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("climate", "set_temperature", _capture_climate_call)
+
+    entry = _entry(
+        {
+            "heating": {
+                "climate_entity": "climate.test_thermostat",
+                "apply_mode": "set_temperature",
+                "temperature_step": 0.5,
+                "manual_override_guard": True,
+                "override_branches": {
+                    "away": {
+                        "branch": "fixed_target",
+                        "target_temperature": 20.0,
+                    }
+                },
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("climate.test_thermostat", "heat", {"temperature": 19.8})
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.heima_heating_state").state == "idle"
+    assert hass.states.get("sensor.heima_heating_reason").state == "small_delta_skip"
+    assert hass.states.get("binary_sensor.heima_heating_applying_guard").state == "on"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_e2e_heating_manual_hold_blocks_fixed_target_apply(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    calls: list[dict[str, object]] = []
+
+    async def _capture_climate_call(call):
+        calls.append(dict(call.data))
+
+    hass.services.async_register("climate", "set_temperature", _capture_climate_call)
+
+    entry = _entry(
+        {
+            "heating": {
+                "climate_entity": "climate.test_thermostat",
+                "apply_mode": "set_temperature",
+                "temperature_step": 0.5,
+                "manual_override_guard": True,
+                "override_branches": {
+                    "away": {
+                        "branch": "fixed_target",
+                        "target_temperature": 20.0,
+                    }
+                },
+            }
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("climate.test_thermostat", "heat", {"temperature": 18.0})
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    coordinator.engine.state.set_binary("heima_heating_manual_hold", True)
+    await coordinator.async_request_evaluation(reason="test:heating_manual_hold")
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.heima_heating_state").state == "blocked"
+    assert hass.states.get("sensor.heima_heating_reason").state == "manual_override_blocked"
+    assert hass.states.get("binary_sensor.heima_heating_applying_guard").state == "on"
+    assert len(calls) == 1
+    # Check the canonical event sensor as the stable integration-level observable.
+    assert hass.states.get("sensor.heima_last_event").state == "heating.manual_override_blocked"
