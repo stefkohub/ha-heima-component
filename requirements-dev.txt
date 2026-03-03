@@ -1,3 +1,8 @@
 homeassistant==2025.1.0
-pytest==8.3.3
-pytest-asyncio==0.24.0
+# Let the Home Assistant custom-component test harness own the pytest stack.
+# It pins compatible pytest / pytest-asyncio versions for the HA release line.
+#
+# 0.13.195 still targets HA 2024.12.x, so for HA 2025.1.0 we stay on the
+# first compatible 2025.1.x range and avoid drifting into newer, incompatible
+# harness releases.
+pytest-homeassistant-custom-component>=0.13.196,<0.13.226
