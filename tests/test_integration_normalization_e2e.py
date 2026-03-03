@@ -122,3 +122,57 @@ async def test_e2e_room_weighted_quorum_uses_threshold_and_source_weights(
     assert trace["plugin_id"] == "builtin.weighted_quorum"
     assert trace["configured_source_weights"]["binary_sensor.presence_b"] == 0.8
     assert trace["effective_source_weights"]["binary_sensor.presence_b"] == 0.8
+
+
+@pytest.mark.asyncio
+async def test_e2e_person_quorum_updates_home_sensor_and_group_trace(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    entry = _entry(
+        {
+            "people_named": [
+                {
+                    "slug": "stefano",
+                    "display_name": "Stefano",
+                    "presence_method": "quorum",
+                    "sources": [
+                        "binary_sensor.phone_wifi",
+                        "binary_sensor.watch_ble",
+                    ],
+                    "required": 2,
+                    "enable_override": False,
+                }
+            ]
+        }
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("binary_sensor.phone_wifi", "off")
+    hass.states.async_set("binary_sensor.watch_ble", "off")
+    await hass.async_block_till_done()
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.heima_person_stefano_home") is not None
+    assert hass.states.get("binary_sensor.heima_person_stefano_home").state == "off"
+    assert hass.states.get("sensor.heima_person_stefano_source").state == "quorum"
+
+    hass.states.async_set("binary_sensor.phone_wifi", "on")
+    await hass.async_block_till_done()
+    assert hass.states.get("binary_sensor.heima_person_stefano_home").state == "off"
+
+    hass.states.async_set("binary_sensor.watch_ble", "on")
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.heima_person_stefano_home").state == "on"
+    assert hass.states.get("sensor.heima_person_stefano_confidence").state == "100"
+
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    trace = coordinator.engine.diagnostics()["presence"]["group_trace"]["person:stefano"]
+    assert trace["plugin_id"] == "builtin.quorum"
+    assert trace["required"] == 2
+    assert trace["active_count"] == 2
+    assert trace["used_plugin_fallback"] is False
+    assert trace["fused_observation"]["state"] == "on"
