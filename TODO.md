@@ -77,6 +77,12 @@
 - Implement base policy with lockout and max runtime.
 - Implement Mode A mapping (script-based apply) and watering events.
 
+10. [ ] Cross-Cut — Policy Plugin Framework (Future Rollout)
+- [x] P0 Spec Foundation: define a cross-domain policy plugin framework mini-spec, explicitly separate from normalization plugins.
+- [ ] P1 Framework Only: add policy plugin registry, dispatcher, hook contracts, diagnostics, and safe failure handling.
+- [ ] P2 First Real Adoption: migrate Heating `vacation_curve` from fixed branch to first built-in policy plugin while preserving behavior.
+- [ ] P3 Domain Expansion: extend policy plugins to Lighting / Watering / Constraints only after Heating is stable.
+
 ## Recent Delivered Work (post Phase 2 hardening)
 - Options Flow hardening:
   - fixed edit-step navigation for people/rooms/lighting rooms/zones
@@ -106,3 +112,5 @@
   - additional event catalog emissions (`people.*`, `house_state.changed`, occupancy inconsistencies, security inconsistency, zone conflicts)
 - Architecture planning:
   - added Input Normalization Layer mini-spec (shared contracts/facade + plugin-based fusion registry + incremental rollout N1-N5) to avoid fragmented smart-policy implementations on raw HA states
+  - added Heating Domain mini-spec (scheduler baseline + fixed vacation override branch)
+  - added Policy Plugin Framework mini-spec (future cross-domain policy extension, distinct from normalization plugins)

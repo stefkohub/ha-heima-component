@@ -27,6 +27,7 @@ Heima e una integrazione custom per Home Assistant che fornisce un motore di pol
 - Milestone 2: non ancora implementata; Heating e ancora in fase di design/spec e non ha un runtime applicativo reale.
 - Milestone 1.1: non ancora implementata; il Behavior Framework resta pianificato.
 - Cross-cut Normalization Layer: rollout avanzato e gia integrato nei path runtime principali; il framework e ormai oltre lo stato sperimentale.
+- Cross-cut Policy Plugin Framework: definito a livello spec, non ancora implementato nel runtime.
 
 ## Milestone 0 - Scaffolding e Contratto Entita
 - Inizializzare struttura integrazione.
@@ -153,6 +154,11 @@ Output:
   - bind `climate_entity`
   - creare entita canoniche heating reali
   - aggiungere diagnostica base heating
+  - introdurre il config model base:
+    - `apply_mode`
+    - `temperature_step`
+    - `manual_override_guard`
+    - `override_branches`
 - H4.2 Safe Apply Path
   - leggere setpoint corrente
   - guard `small_delta`
@@ -166,8 +172,14 @@ Output:
     - `total_hours`
     - `is_long`
     - `outdoor_temperature`
+  - modellare i relativi binding espliciti nel config heating
 - H4.4 Vacation Curve Policy Branch
-  - implementare `eco_only`, `ramp_down`, `cruise`, `ramp_up`
+  - introdurre il branch selector per `house_state`
+  - supportare catalogo built-in:
+    - `scheduler_delegate`
+    - `fixed_target`
+    - `vacation_curve`
+  - implementare `vacation_curve` con `eco_only`, `ramp_down`, `cruise`, `ramp_up`
   - safety floor da temperatura esterna
   - quantizzazione sul passo termostato
 - H4.5 Normal Branch Semantics
@@ -178,6 +190,20 @@ Output:
   - unit test policy curve
   - runtime test branch/apply guard
   - HA e2e test con `ConfigEntry`
+
+### 10. Policy Plugin Framework (future track)
+- P0 Spec Foundation
+  - mini-spec cross-domain definita
+  - separazione esplicita da normalization plugins
+  - Heating identificato come primo adopter futuro
+- P1 Framework Only
+  - introdurre registry policy plugin
+  - dispatcher per hook `pre_policy`, `domain_policy`, `post_policy`, `apply_filter`
+  - diagnostica e gestione errori/fallback
+- P2 First Real Adoption
+  - migrare Heating `vacation_curve` da branch fisso a primo built-in policy plugin, senza cambiare comportamento
+- P3 Domain Expansion
+  - estendere con cautela a Lighting / Watering / Constraints dopo stabilizzazione Heating
 
 ## Modello Dati (Sintesi)
 - People: binary_sensor, sensor confidence, source, override.
@@ -222,5 +248,6 @@ Output:
    - H4.3 Vacation Timing Bindings
    - H4.4 Vacation Curve Policy Branch
 4. Rafforzare lighting con policy conflitti zone-room configurabile (`first_wins/priority`).
-5. Definire una mini-spec futura per policy pluggable cross-domain, senza introdurre ancora plugin di policy nel runtime.
-6. Integrare Behavior Framework v1.1.
+5. Mantenere il Policy Plugin Framework come track separato: nessuna implementazione runtime finche Heating v1 fisso non e stabile.
+6. Dopo stabilizzazione Heating, valutare `P1` (framework-only) come prossimo step architetturale.
+7. Integrare Behavior Framework v1.1.

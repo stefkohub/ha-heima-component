@@ -56,6 +56,8 @@ ROOM_LOGIC = ["any_of", "all_of", "weighted_quorum"]
 ROOM_OCCUPANCY_MODES = ["derived", "none"]
 HEATING_APPLY_MODES = ["delegate_to_scheduler", "set_temperature"]
 LIGHTING_APPLY_MODES = ["scene", "delegate"]
+HEATING_HOUSE_STATES = ["away", "home", "guest", "vacation", "sleeping", "relax", "working"]
+HEATING_BRANCH_TYPES = ["disabled", "scheduler_delegate", "fixed_target", "vacation_curve"]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -139,6 +141,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         self._editing_room_id: str | None = None
         self._editing_zone_id: str | None = None
         self._editing_lighting_room_id: str | None = None
+        self._editing_heating_house_state: str | None = None
 
     # ---- Helpers ----
     def _people_named(self) -> list[dict[str, Any]]:
@@ -152,6 +155,13 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
     def _lighting_zones(self) -> list[dict[str, Any]]:
         return list(self.options.get(OPT_LIGHTING_ZONES, []))
+
+    def _heating_config(self) -> dict[str, Any]:
+        return dict(self.options.get(OPT_HEATING, {}))
+
+    def _heating_override_branches(self) -> dict[str, dict[str, Any]]:
+        branches = self._heating_config().get("override_branches", {})
+        return dict(branches) if isinstance(branches, dict) else {}
 
     def _room_ids(self) -> list[str]:
         return [room["room_id"] for room in self._rooms()]
@@ -278,6 +288,77 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
             data.get("security_mismatch_persist_s", DEFAULT_SECURITY_MISMATCH_PERSIST_S)
         )
         return data
+
+    def _normalize_heating_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        data = dict(payload)
+        if data.get("climate_entity"):
+            data["climate_entity"] = str(data["climate_entity"])
+        else:
+            data.pop("climate_entity", None)
+
+        apply_mode = str(
+            data.get("apply_mode", data.get("apply_mode_auto", "delegate_to_scheduler"))
+            or "delegate_to_scheduler"
+        ).strip()
+        if apply_mode not in HEATING_APPLY_MODES:
+            apply_mode = "delegate_to_scheduler"
+        data["apply_mode"] = apply_mode
+        data.pop("apply_mode_auto", None)
+
+        try:
+            data["temperature_step"] = float(data.get("temperature_step", 0.5))
+        except (TypeError, ValueError):
+            data["temperature_step"] = 0.5
+
+        data["manual_override_guard"] = bool(data.get("manual_override_guard", True))
+
+        for key in (
+            "outdoor_temperature_entity",
+            "vacation_hours_from_start_entity",
+            "vacation_hours_to_end_entity",
+            "vacation_total_hours_entity",
+            "vacation_is_long_entity",
+        ):
+            if data.get(key):
+                data[key] = str(data[key])
+            else:
+                data.pop(key, None)
+
+        branches = data.get("override_branches", {})
+        if isinstance(branches, dict):
+            normalized_branches: dict[str, dict[str, Any]] = {}
+            for house_state, branch_cfg in branches.items():
+                state_key = str(house_state).strip()
+                if state_key not in HEATING_HOUSE_STATES or not isinstance(branch_cfg, dict):
+                    continue
+                normalized_branches[state_key] = self._normalize_heating_branch_payload(branch_cfg)
+            data["override_branches"] = normalized_branches
+        else:
+            data["override_branches"] = {}
+        return data
+
+    def _normalize_heating_branch_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        branch = str(payload.get("branch", "disabled") or "disabled").strip()
+        if branch not in HEATING_BRANCH_TYPES:
+            branch = "disabled"
+        normalized: dict[str, Any] = {"branch": branch}
+        if branch == "fixed_target":
+            if payload.get("target_temperature") not in (None, ""):
+                normalized["target_temperature"] = float(payload["target_temperature"])
+            return normalized
+        if branch == "vacation_curve":
+            for key in (
+                "vacation_ramp_down_h",
+                "vacation_ramp_up_h",
+                "vacation_min_temp",
+                "vacation_comfort_temp",
+                "vacation_start_temp",
+                "vacation_min_total_hours_for_ramp",
+            ):
+                if payload.get(key) not in (None, ""):
+                    normalized[key] = float(payload[key])
+            return normalized
+        return normalized
 
     def _error_if_immutable_changed(
         self, payload: dict[str, Any], field: str, expected_value: str | None
@@ -1004,48 +1085,178 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
     # ---- Heating ----
     async def async_step_heating(self, user_input=None) -> FlowResult:
-        current = dict(self.options.get(OPT_HEATING, {}))
+        current = self._heating_config()
         if user_input is None:
-            return self.async_show_form(step_id="heating", data_schema=self._heating_schema(current))
+            return self.async_show_form(step_id="heating", data_schema=self._heating_general_schema(current))
 
-        if user_input.get("apply_mode_auto") == "set_temperature" and not user_input.get("climate_entity"):
+        payload = self._normalize_heating_payload(user_input)
+        errors = self._validate_heating_general(payload)
+        if errors:
             return self.async_show_form(
                 step_id="heating",
-                data_schema=self._heating_schema(user_input),
-                errors={"climate_entity": "required"},
+                data_schema=self._heating_general_schema(payload),
+                errors=errors,
             )
 
-        self.options[OPT_HEATING] = user_input
-        return await self.async_step_security()
+        existing = self._normalize_heating_payload(self._heating_config())
+        payload["override_branches"] = existing.get("override_branches", {})
+        self.options[OPT_HEATING] = payload
+        return await self.async_step_heating_branches_menu()
 
-    def _heating_schema(self, defaults: dict[str, Any]) -> vol.Schema:
+    def _heating_general_schema(self, defaults: dict[str, Any]) -> vol.Schema:
+        defaults = self._normalize_heating_payload(defaults)
         schema = vol.Schema(
             {
-                vol.Optional("climate_entity"): _entity_selector(["climate"]),
-                vol.Required(
-                    "apply_mode_auto",
-                    default=defaults.get("apply_mode_auto", "delegate_to_scheduler"),
-                ): vol.In(HEATING_APPLY_MODES),
-                vol.Optional("setpoint_eco", default=defaults.get("setpoint_eco", 18.0)):
+                vol.Required("climate_entity"): _entity_selector(["climate"]),
+                vol.Required("apply_mode", default=defaults.get("apply_mode", "delegate_to_scheduler")):
+                vol.In(HEATING_APPLY_MODES),
+                vol.Required("temperature_step", default=defaults.get("temperature_step", 0.5)):
                 vol.Coerce(float),
                 vol.Optional(
-                    "setpoint_comfort", default=defaults.get("setpoint_comfort", 20.0)
-                ): vol.Coerce(float),
-                vol.Optional(
-                    "setpoint_preheat", default=defaults.get("setpoint_preheat", 21.5)
-                ): vol.Coerce(float),
-                vol.Optional(
-                    "min_seconds_between_commands",
-                    default=defaults.get("min_seconds_between_commands", 120),
-                ): cv.positive_int,
-                vol.Optional(
-                    "verify_after_s", default=defaults.get("verify_after_s", 15)
-                ): cv.positive_int,
-                vol.Optional("max_retries", default=defaults.get("max_retries", 2)):
-                cv.positive_int,
+                    "manual_override_guard",
+                    default=defaults.get("manual_override_guard", True),
+                ): bool,
+                vol.Optional("outdoor_temperature_entity"): _entity_selector(["sensor"]),
+                vol.Optional("vacation_hours_from_start_entity"): _entity_selector(["sensor"]),
+                vol.Optional("vacation_hours_to_end_entity"): _entity_selector(["sensor"]),
+                vol.Optional("vacation_total_hours_entity"): _entity_selector(["sensor"]),
+                vol.Optional("vacation_is_long_entity"): _entity_selector(["binary_sensor"]),
             }
         )
         return self._with_suggested(schema, defaults)
+
+    def _validate_heating_general(self, payload: dict[str, Any]) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        if not payload.get("climate_entity"):
+            errors["climate_entity"] = "required"
+        try:
+            if float(payload.get("temperature_step", 0)) <= 0:
+                errors["temperature_step"] = "invalid_number"
+        except (TypeError, ValueError):
+            errors["temperature_step"] = "invalid_number"
+        return errors
+
+    async def async_step_heating_branches_menu(self, user_input=None) -> FlowResult:
+        return self.async_show_menu(
+            step_id="heating_branches_menu",
+            menu_options=[
+                "heating_branches_edit",
+                "heating_branches_save",
+            ],
+        )
+
+    async def async_step_heating_branches_edit(self, user_input=None) -> FlowResult:
+        if user_input is None:
+            schema = vol.Schema({vol.Required("house_state"): vol.In(HEATING_HOUSE_STATES)})
+            return self.async_show_form(step_id="heating_branches_edit", data_schema=schema)
+
+        house_state = str(user_input.get("house_state", "")).strip()
+        if house_state not in HEATING_HOUSE_STATES:
+            return await self.async_step_heating_branches_menu()
+        self._editing_heating_house_state = house_state
+        return await self.async_step_heating_branch_edit_form()
+
+    async def async_step_heating_branch_edit_form(self, user_input=None) -> FlowResult:
+        house_state = self._editing_heating_house_state
+        if not house_state:
+            return await self.async_step_heating_branches_menu()
+
+        current_branch = self._heating_override_branches().get(house_state, {"branch": "disabled"})
+        if user_input is None:
+            defaults = dict(current_branch)
+            defaults["house_state"] = house_state
+            return self.async_show_form(
+                step_id="heating_branch_edit_form",
+                data_schema=self._heating_branch_schema(defaults),
+            )
+
+        payload = self._normalize_heating_branch_payload(user_input)
+        errors = self._validate_heating_branch(payload)
+        if errors:
+            defaults = dict(payload)
+            defaults["house_state"] = house_state
+            return self.async_show_form(
+                step_id="heating_branch_edit_form",
+                data_schema=self._heating_branch_schema(defaults),
+                errors=errors,
+            )
+
+        heating = self._normalize_heating_payload(self._heating_config())
+        branches = dict(heating.get("override_branches", {}))
+        branches[house_state] = payload
+        heating["override_branches"] = branches
+        self.options[OPT_HEATING] = heating
+        return await self.async_step_heating_branches_menu()
+
+    def _heating_branch_schema(self, defaults: dict[str, Any]) -> vol.Schema:
+        branch = str(defaults.get("branch", "disabled") or "disabled").strip()
+        if branch not in HEATING_BRANCH_TYPES:
+            branch = "disabled"
+        schema_map: dict[Any, Any] = {
+            vol.Required("house_state"): vol.In(HEATING_HOUSE_STATES),
+            vol.Required("branch", default=branch): vol.In(HEATING_BRANCH_TYPES),
+        }
+        if branch == "fixed_target":
+            schema_map[vol.Optional("target_temperature")] = vol.Coerce(float)
+        elif branch == "vacation_curve":
+            for key in (
+                "vacation_ramp_down_h",
+                "vacation_ramp_up_h",
+                "vacation_min_temp",
+                "vacation_comfort_temp",
+                "vacation_start_temp",
+                "vacation_min_total_hours_for_ramp",
+            ):
+                schema_map[vol.Optional(key)] = vol.Coerce(float)
+        return self._with_suggested(vol.Schema(schema_map), defaults)
+
+    def _validate_heating_branch(self, payload: dict[str, Any]) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        branch = str(payload.get("branch", "disabled"))
+        if branch == "fixed_target":
+            try:
+                if float(payload.get("target_temperature", 0)) <= 0:
+                    errors["target_temperature"] = "invalid_number"
+            except (TypeError, ValueError):
+                errors["target_temperature"] = "invalid_number"
+            return errors
+        if branch == "vacation_curve":
+            for key in (
+                "vacation_ramp_down_h",
+                "vacation_ramp_up_h",
+                "vacation_min_total_hours_for_ramp",
+            ):
+                try:
+                    if float(payload.get(key, -1)) < 0:
+                        errors[key] = "invalid_number"
+                except (TypeError, ValueError):
+                    errors[key] = "invalid_number"
+            for key in (
+                "vacation_min_temp",
+                "vacation_comfort_temp",
+                "vacation_start_temp",
+            ):
+                try:
+                    if float(payload.get(key, 0)) <= 0:
+                        errors[key] = "invalid_number"
+                except (TypeError, ValueError):
+                    errors[key] = "invalid_number"
+
+            heating = self._normalize_heating_payload(self._heating_config())
+            for key in (
+                "outdoor_temperature_entity",
+                "vacation_hours_from_start_entity",
+                "vacation_hours_to_end_entity",
+                "vacation_total_hours_entity",
+                "vacation_is_long_entity",
+            ):
+                if not heating.get(key):
+                    errors["branch"] = "missing_vacation_bindings"
+                    break
+        return errors
+
+    async def async_step_heating_branches_save(self, user_input=None) -> FlowResult:
+        return await self.async_step_security()
 
     # ---- Security ----
     async def async_step_security(self, user_input=None) -> FlowResult:
@@ -1197,6 +1408,8 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
             options[OPT_PEOPLE_ANON] = self._normalize_people_anonymous_payload(
                 options.get(OPT_PEOPLE_ANON, {})
             )
+        if OPT_HEATING in options:
+            options[OPT_HEATING] = self._normalize_heating_payload(options.get(OPT_HEATING, {}))
 
         # Keep the in-memory working copy coherent for subsequent menu steps in the same flow.
         self.options = options

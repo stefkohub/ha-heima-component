@@ -6,7 +6,7 @@ Define the first real Heating domain for Heima.
 
 This v1 design is intentionally **not policy-pluggable yet**:
 - Heating has a fixed internal policy tree.
-- `vacation` is modeled as an explicit **override policy branch**.
+- `house_state` may activate an explicit built-in **override policy branch**.
 - Future pluggable policies remain a separate later evolution for all domains.
 
 ---
@@ -16,7 +16,7 @@ This v1 design is intentionally **not policy-pluggable yet**:
 Heating should:
 - normally follow a scheduler / delegated schedule source
 - safely apply setpoint changes when Heima is allowed to control the thermostat
-- switch to a dedicated **vacation curve override** when `house_state = vacation`
+- switch to a built-in **house-state override branch** when configured for the current `house_state`
 
 The Heating domain is responsible for:
 - deciding the effective heating intent
@@ -57,7 +57,7 @@ Heating supports two apply modes:
 The Heating policy tree is:
 
 1. if manual override guard blocks control -> no active apply
-2. else if `house_state = vacation` -> use `vacation_curve` policy branch
+2. else if the current `house_state` maps to a configured built-in override branch -> use that branch
 3. else -> use `normal` policy branch
 
 `normal` policy branch:
@@ -65,9 +65,25 @@ The Heating policy tree is:
 - if `apply_mode = delegate_to_scheduler`, Heima emits an intent but does not override the setpoint
 - if `apply_mode = set_temperature`, future non-vacation logic may set a target, but this is out of scope for the first mini-spec
 
-`vacation_curve` policy branch:
+Override policy branch:
 - temporarily overrides the normal branch
-- computes a target setpoint from vacation timing and weather safety rules
+- is selected from a fixed built-in branch catalog keyed by `house_state`
+
+Built-in branch catalog for v1:
+- `disabled`
+- `scheduler_delegate`
+- `fixed_target`
+- `vacation_curve`
+
+Meaning:
+- `disabled`
+  - no override branch is active for that `house_state`
+- `scheduler_delegate`
+  - explicitly preserve scheduler ownership in that state
+- `fixed_target`
+  - Heima targets a fixed configured setpoint in that state
+- `vacation_curve`
+  - Heima computes a time-based vacation temperature curve
 
 This explicit branching is contractual in v1.
 
@@ -79,14 +95,68 @@ This explicit branching is contractual in v1.
 
 - `climate_entity` (required)
 
-### 4.2 Vacation Curve Inputs
+### 4.1.1 Core Heating Config
+
+Heating v1 requires a configuration model that can represent:
+
+- `climate_entity`
+- `apply_mode`
+- `temperature_step`
+- `manual_override_guard`
+
+Recommended v1 defaults:
+- `apply_mode = delegate_to_scheduler`
+- `temperature_step` read from config first, device-derived later if supported
+- `manual_override_guard = enabled`
+
+### 4.2 Override Branch Inputs
+
+All override branches depend on:
+
+- `house_state` (must already be canonicalized by Heima)
+- `current_setpoint` (read from the `climate` entity)
+- `manual_override_state` (derived from thermostat state / preset / hold)
+
+Additional inputs depend on the selected branch type.
+
+### 4.2.1 House-State Branch Mapping (Config Model)
+
+Heating v1 must support an explicit configuration mapping:
+
+- `house_state -> built-in branch type`
+
+Recommended shape:
+
+- `override_branches`
+  - keyed by canonical `house_state`
+  - value = branch config object
+
+Conceptual example:
+
+```yaml
+override_branches:
+  vacation:
+    branch: vacation_curve
+  sleeping:
+    branch: fixed_target
+    target_temperature: 17.5
+  guest:
+    branch: scheduler_delegate
+```
+
+Rules:
+- only canonical Heima `house_state` values are valid keys
+- if a state is not configured, effective branch = `disabled`
+- exactly one branch object per `house_state`
+- branch objects are validated according to branch type
+
+This mapping is fixed-policy configuration, not a plugin registry.
+
+### 4.3 Vacation Curve Inputs
 
 The v1 domain consumes the following inputs for the vacation branch:
 
-- `house_state` (must already be canonicalized by Heima)
 - `outdoor_temperature`
-- `current_setpoint` (read from the `climate` entity)
-- `manual_override_state` (derived from thermostat state / preset / hold)
 
 Vacation timing context:
 - `hours_from_start`
@@ -97,7 +167,17 @@ Vacation timing context:
 These may initially come from bound helper/sensor entities.
 In v1 they do **not** need to be natively modeled by Heima yet.
 
-### 4.3 Vacation Policy Parameters
+### 4.4 Fixed Target Branch Inputs
+
+For a `fixed_target` branch, v1 requires:
+
+- `target_temperature`
+
+Validation:
+- `target_temperature` must be > 0
+- runtime must quantize it using `temperature_step`
+
+### 4.5 Vacation Policy Parameters
 
 - `temperature_step`
 - `vacation_ramp_down_h`
@@ -114,16 +194,90 @@ Outdoor safety thresholds (v1 default fixed logic):
 
 These thresholds may become configurable later, but v1 allows fixed defaults.
 
+### 4.6 Vacation Branch Config Shape
+
+Recommended branch-specific configuration:
+
+```yaml
+override_branches:
+  vacation:
+    branch: vacation_curve
+    vacation_ramp_down_h: 8
+    vacation_ramp_up_h: 10
+    vacation_min_temp: 16.5
+    vacation_comfort_temp: 19.5
+    vacation_start_temp: 19.5
+    vacation_min_total_hours_for_ramp: 24
+```
+
+Rules:
+- all vacation parameters belong to the `vacation_curve` branch config
+- these values are branch-local, not global heating values
+- if a branch is not `vacation_curve`, these fields are invalid and must be rejected or dropped
+
+This keeps the configuration aligned with the branch-selector model.
+
+### 4.7 External Sensor Bindings (v1 pragmatic path)
+
+For the first implementation, the following may be modeled as explicit optional bindings in Heating config:
+
+- `outdoor_temperature_entity`
+- `vacation_hours_from_start_entity`
+- `vacation_hours_to_end_entity`
+- `vacation_total_hours_entity`
+- `vacation_is_long_entity`
+
+This allows Heima to consume existing HA helpers/sensors without introducing native vacation-window modeling yet.
+
 ---
 
-## 5. Vacation Curve Policy
+## 5. House-State Override Branches
 
-### 5.1 Activation
+### 5.1 Branch Selection
 
-The vacation branch is active when:
-- `house_state = vacation`
+For the current canonical `house_state`, Heating may activate one built-in override branch.
 
-### 5.2 Phases
+Recommended v1 semantics:
+- at most one branch is active at a time
+- because `house_state` is singular, there is no branch conflict resolution in v1
+
+Examples:
+- `vacation -> vacation_curve`
+- `sleeping -> fixed_target`
+- `guest -> scheduler_delegate`
+- any unmapped state -> `normal`
+
+### 5.2 `scheduler_delegate` Branch
+
+Semantics:
+- explicitly preserve scheduler ownership
+- do not send a thermostat setpoint override
+- still expose diagnostics showing that an override branch was matched but delegated
+
+### 5.3 `fixed_target` Branch
+
+Semantics:
+- compute `target = configured fixed target`
+- quantize using the same thermostat step rules as other active-setpoint branches
+- apply through the same guard layer
+
+This branch is intentionally simple and reusable for states such as:
+- `sleeping`
+- `away`
+- `working`
+
+### 5.4 `vacation_curve` Branch
+
+The `vacation_curve` branch is the first full built-in algorithmic branch.
+
+## 6. Vacation Curve Policy
+
+### 6.1 Activation
+
+The vacation curve branch is active when:
+- the override branch selector resolves the current `house_state` to `vacation_curve`
+
+### 6.2 Phases
 
 The policy has four phases:
 
@@ -132,7 +286,7 @@ The policy has four phases:
 - `cruise`
 - `ramp_up`
 
-### 5.3 Phase Selection
+### 6.3 Phase Selection
 
 If `is_long = false`:
 - phase = `eco_only`
@@ -143,14 +297,14 @@ If `is_long = true`:
 - else if `hours_to_end < vacation_ramp_up_h`: phase = `ramp_up`
 - else: phase = `cruise`
 
-### 5.4 Safety-Adjusted Eco Temperature
+### 6.4 Safety-Adjusted Eco Temperature
 
 `t_min_safety`:
 - `max(vacation_min_temp, 17.0)` when `outdoor_temperature <= 0`
 - `max(vacation_min_temp, 16.5)` when `outdoor_temperature <= 3`
 - `vacation_min_temp` otherwise
 
-### 5.5 Raw Target Calculation
+### 6.5 Raw Target Calculation
 
 If phase = `eco_only`:
 - `t_raw = t_min_safety`
@@ -169,7 +323,7 @@ If phase = `ramp_up`:
 If timing data is invalid (`total_hours <= 0`):
 - fail safe to `t_min_safety`
 
-### 5.6 Quantization
+### 6.6 Quantization
 
 The computed target is quantized to the thermostat step:
 
@@ -179,7 +333,7 @@ This is required to avoid impossible or noisy setpoints.
 
 ---
 
-## 6. Apply Guard Rules
+## 7. Apply Guard Rules
 
 Before applying a setpoint:
 
@@ -205,7 +359,7 @@ When apply is allowed:
 - `hvac_mode = heat`
 - `temperature = target`
 
-This is the contractual first apply behavior for the vacation branch.
+This is the contractual first apply behavior for active setpoint branches (`fixed_target` and `vacation_curve`).
 
 ### 6.4 Rate Limiting
 
@@ -217,7 +371,7 @@ The first mini-spec does not hardcode the exact interval, but the implementation
 
 ---
 
-## 7. Canonical Heating Outputs
+## 8. Canonical Heating Outputs
 
 Heating v1 should expose at least:
 
@@ -228,10 +382,10 @@ Heating v1 should expose at least:
   - e.g. `normal_scheduler`, `vacation_curve`, `manual_override`, `small_delta_skip`
 
 - `sensor.heima_heating_phase`
-  - `eco_only`, `ramp_down`, `cruise`, `ramp_up`, or empty when not in vacation branch
+  - `eco_only`, `ramp_down`, `cruise`, `ramp_up`, or empty when not in `vacation_curve`
 
 - `sensor.heima_heating_target_temp`
-  - the currently computed target setpoint, when applicable
+  - the currently computed target setpoint, when applicable (`fixed_target` or `vacation_curve`)
 
 - `select.heima_heating_intent`
   - future-facing canonical intent selector (`auto`, `eco`, `comfort`, `preheat`, `off`)
@@ -241,12 +395,14 @@ These names are subject to the existing entity registry conventions in the main 
 
 ---
 
-## 8. Diagnostics
+## 9. Diagnostics
 
 Heating diagnostics must expose at least:
 
 - active branch:
   - `normal`
+  - `scheduler_delegate`
+  - `fixed_target`
   - `vacation_curve`
 
 - current phase
@@ -263,11 +419,18 @@ Heating diagnostics must expose at least:
 - whether manual override blocked apply
 - whether apply was skipped due to small delta
 
+For `fixed_target`, diagnostics may omit vacation timing fields but must still expose:
+- branch
+- configured target
+- quantized target
+- current setpoint
+- delta
+
 This is required to replace ad hoc logbook-style debugging with structured diagnostics.
 
 ---
 
-## 9. Events (initial set)
+## 10. Events (initial set)
 
 Recommended initial events for Heating v1:
 
@@ -280,7 +443,7 @@ These should follow the existing Heima event pipeline and category gating rules.
 
 ---
 
-## 10. Relationship with the Normalization Layer
+## 11. Relationship with the Normalization Layer
 
 The temperature-curve algorithm itself is **not** a signal-fusion plugin.
 
@@ -298,7 +461,21 @@ This keeps concerns separated:
 
 ---
 
-## 11. Future Evolution (Not in v1)
+## 12. Relationship with Future Policy Plugins
+
+The built-in branch selector introduced here is designed to evolve cleanly into the future Policy Plugin Framework.
+
+Expected future evolution:
+- current mapping:
+  - `house_state -> built-in branch type`
+- future mapping:
+  - `house_state -> policy plugin / built-in policy id`
+
+This means the v1 selector is intentionally compatible with future policy pluggability without requiring it now.
+
+---
+
+## 13. Future Evolution (Not in v1)
 
 Future versions may add:
 
