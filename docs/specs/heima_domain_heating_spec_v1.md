@@ -250,7 +250,7 @@ Examples:
 ### 5.2 `scheduler_delegate` Branch
 
 Semantics:
-- explicitly preserve scheduler ownership
+- explicitly yield control to the external scheduler
 - do not send a thermostat setpoint override
 - still expose diagnostics showing that an override branch was matched but delegated
 
@@ -348,7 +348,7 @@ The preferred next-check deadlines are:
 - the next phase boundary, or
 - the next moment when the quantized target could change
 
-If exact quantized-step timing is not yet derivable, a conservative bounded interval may be used temporarily, but blind tight polling is explicitly out of scope.
+Heating v1 treats exact next quantized target-change timing as the target behavior. Blind tight polling remains explicitly out of scope.
 
 ---
 
@@ -356,14 +356,16 @@ If exact quantized-step timing is not yet derivable, a conservative bounded inte
 
 Before applying a setpoint:
 
-### 6.1 Manual Override Guard
+### 7.1 Manual Override Guard
 
-If the thermostat indicates a manual/preset state that must not be overridden:
+If either of these is active:
+- Heima manual hold
+- a thermostat preset recognized as a manual-hold override
 - no apply is sent
 - diagnostics must record the block reason
 - an event may be emitted (`heating.manual_override_blocked`)
 
-### 6.2 Small Delta Guard
+### 7.2 Small Delta Guard
 
 Heima only applies a new target if:
 - `abs(target - current_setpoint) >= temperature_step`
@@ -372,7 +374,7 @@ If not:
 - skip apply
 - diagnostics should record `small_delta_skip`
 
-### 6.3 Apply Command
+### 7.3 Apply Command
 
 When apply is allowed:
 - `hvac_mode = heat`
@@ -380,7 +382,7 @@ When apply is allowed:
 
 This is the contractual first apply behavior for active setpoint branches (`fixed_target` and `vacation_curve`).
 
-### 6.4 Rate Limiting
+### 7.4 Rate Limiting
 
 Heating apply must be rate-limited to avoid thermostat spam.
 
@@ -461,6 +463,7 @@ Recommended initial events for Heating v1:
 
 - `heating.vacation_phase_changed`
 - `heating.target_changed`
+- `heating.branch_changed`
 - `heating.apply_skipped_small_delta`
 - `heating.manual_override_blocked`
 - `heating.apply_rate_limited`

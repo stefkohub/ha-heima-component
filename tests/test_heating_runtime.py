@@ -146,6 +146,41 @@ def test_fixed_target_branch_skips_small_delta_and_sets_guard():
     assert not any(step.action == "climate.set_temperature" for step in plan.steps)
 
 
+def test_fixed_target_branch_blocks_on_climate_manual_preset_override():
+    options = {
+        "heating": {
+            "climate_entity": "climate.test_thermostat",
+            "apply_mode": "set_temperature",
+            "temperature_step": 0.5,
+            "manual_override_guard": True,
+            "override_branches": {
+                "away": {
+                    "branch": "fixed_target",
+                    "target_temperature": 20.0,
+                }
+            },
+        }
+    }
+    engine = _build_engine(
+        options,
+        {
+            "climate.test_thermostat": ("heat", {"temperature": 18.0, "preset_mode": "PermanentHold"}),
+        },
+    )
+
+    snapshot = engine._compute_snapshot(reason="test")
+    plan = engine._build_apply_plan(snapshot)
+    trace = engine.diagnostics()["heating"]
+
+    assert snapshot.house_state == "away"
+    assert engine.state.get_sensor("heima_heating_state") == "blocked"
+    assert engine.state.get_sensor("heima_heating_reason") == "manual_override_blocked"
+    assert engine.state.get_binary("heima_heating_applying_guard") is True
+    assert not any(step.action == "climate.set_temperature" for step in plan.steps)
+    assert trace["climate_preset_mode"] == "PermanentHold"
+    assert trace["manual_override_source"] == "climate_preset"
+
+
 def test_heating_without_active_override_branch_delegates_to_scheduler():
     options = {
         "heating": {
@@ -181,6 +216,27 @@ def test_heating_without_active_override_branch_delegates_to_scheduler():
     assert not any(step.domain == "heating" for step in plan.steps)
     assert trace["selected_branch"] == "disabled"
     assert trace["apply_allowed"] is False
+
+
+def test_heating_vacation_recheck_delay_prefers_next_quantized_target_change():
+    delay_s = HeimaEngine._heating_vacation_recheck_delay_s(
+        phase="ramp_down",
+        vacation_meta={
+            "hours_from_start": 2.0,
+            "hours_to_end": 30.0,
+            "ramp_down_h": 8.0,
+            "ramp_up_h": 10.0,
+            "start_temp": 19.5,
+            "comfort_temp": 19.5,
+            "min_safety": 16.5,
+            "raw_target": 18.875,
+            "quantized_target": 19.0,
+        },
+        temperature_step=0.5,
+    )
+
+    assert delay_s is not None
+    assert delay_s == pytest.approx(1200.0)
 
 
 @pytest.mark.asyncio
@@ -297,6 +353,57 @@ async def test_heating_runtime_emits_phase_and_target_events_for_vacation_curve(
     types = [payload["type"] for payload in payloads]
     assert "heating.vacation_phase_changed" in types
     assert "heating.target_changed" in types
+
+
+@pytest.mark.asyncio
+async def test_heating_runtime_emits_branch_changed_event_on_transition():
+    options = {
+        "heating": {
+            "climate_entity": "climate.test_thermostat",
+            "apply_mode": "set_temperature",
+            "temperature_step": 0.5,
+            "manual_override_guard": True,
+            "override_branches": {
+                "away": {"branch": "fixed_target", "target_temperature": 18.0},
+                "vacation": {
+                    "branch": "vacation_curve",
+                    "vacation_ramp_down_h": 8.0,
+                    "vacation_ramp_up_h": 10.0,
+                    "vacation_min_temp": 16.5,
+                    "vacation_comfort_temp": 19.5,
+                    "vacation_start_temp": 19.5,
+                    "vacation_min_total_hours_for_ramp": 24.0,
+                },
+            },
+            "outdoor_temperature_entity": "sensor.outdoor_temp",
+            "vacation_hours_from_start_entity": "sensor.vacation_from",
+            "vacation_hours_to_end_entity": "sensor.vacation_to",
+            "vacation_total_hours_entity": "sensor.vacation_total",
+            "vacation_is_long_entity": "binary_sensor.vacation_long",
+        }
+    }
+    engine = _build_engine(
+        options,
+        {
+            "climate.test_thermostat": ("heat", {"temperature": 18.0}),
+            "sensor.outdoor_temp": "5.0",
+            "sensor.vacation_from": "2.0",
+            "sensor.vacation_to": "30.0",
+            "sensor.vacation_total": "32.0",
+            "binary_sensor.vacation_long": "on",
+        },
+    )
+
+    await engine.async_evaluate(reason="away")
+    engine._hass.states._values["input_boolean.vacation_mode"] = "on"
+    await engine.async_evaluate(reason="vacation")
+
+    payloads = [payload for event_type, payload in engine._hass.bus.events if event_type == "heima_event"]
+    branch_events = [payload for payload in payloads if payload["type"] == "heating.branch_changed"]
+
+    assert len(branch_events) == 1
+    assert branch_events[0]["context"]["previous"] == "fixed_target"
+    assert branch_events[0]["context"]["current"] == "vacation_curve"
 
 
 @pytest.mark.asyncio

@@ -95,6 +95,7 @@ class HeimaEngine:
         self._heating_last_apply_ts: float | None = None
         self._heating_last_reported_phase: str | None = None
         self._heating_last_reported_target: float | None = None
+        self._heating_last_reported_branch: str | None = None
         self._last_engine_enabled_state: bool | None = None
         self._events = HeimaEventPipeline(hass)
         self._normalizer = InputNormalizer(hass)
@@ -527,6 +528,16 @@ class HeimaEngine:
         temperature_step = self._coerce_positive_float(heating_cfg.get("temperature_step"), default=0.5)
         current_setpoint = self._current_climate_setpoint(climate_entity)
         outdoor_temperature = self._coerce_float_from_entity(heating_cfg.get("outdoor_temperature_entity"))
+        climate_preset_mode = self._coerce_text(self._state_attr(climate_entity, "preset_mode"))
+        climate_manual_override = self._heating_climate_manual_override_detected(climate_preset_mode)
+        manual_override_active = manual_hold or climate_manual_override
+        manual_override_source = (
+            "heima_manual_hold"
+            if manual_hold
+            else "climate_preset"
+            if climate_manual_override
+            else None
+        )
 
         previous_reason = self._state.get_sensor("heima_heating_reason")
         state = "delegated"
@@ -561,8 +572,7 @@ class HeimaEngine:
                     branch_reason="fixed_target_branch",
                     target_temperature=target_temperature,
                     apply_mode=apply_mode,
-                    manual_guard_enabled=manual_guard_enabled,
-                    manual_hold=manual_hold,
+                    manual_override_active=manual_override_active if manual_guard_enabled else False,
                     current_setpoint=current_setpoint,
                     temperature_step=temperature_step,
                 )
@@ -598,8 +608,7 @@ class HeimaEngine:
                     branch_reason="vacation_curve_branch",
                     target_temperature=target_temperature,
                     apply_mode=apply_mode,
-                    manual_guard_enabled=manual_guard_enabled,
-                    manual_hold=manual_hold,
+                    manual_override_active=manual_override_active if manual_guard_enabled else False,
                     current_setpoint=current_setpoint,
                     temperature_step=temperature_step,
                 )
@@ -627,6 +636,10 @@ class HeimaEngine:
             "temperature_step": temperature_step,
             "manual_override_guard_enabled": manual_guard_enabled,
             "manual_hold": manual_hold,
+            "climate_preset_mode": climate_preset_mode,
+            "climate_manual_override_detected": climate_manual_override,
+            "manual_override_active": manual_override_active if manual_guard_enabled else False,
+            "manual_override_source": manual_override_source if manual_guard_enabled else None,
             "state": state,
             "reason": reason,
             "phase": phase,
@@ -644,6 +657,7 @@ class HeimaEngine:
             previous_reason=str(previous_reason) if previous_reason not in (None, "") else None,
             reason=reason,
             phase=phase,
+            manual_override_source=manual_override_source if manual_guard_enabled else None,
             target_temperature=target_temperature,
             apply_allowed=apply_allowed,
             skip_small_delta=skip_small_delta,
@@ -652,6 +666,7 @@ class HeimaEngine:
             selected_branch=branch_type,
             phase=phase,
             vacation_meta=vacation_meta,
+            temperature_step=temperature_step,
         )
 
     def _queue_heating_runtime_events(
@@ -661,10 +676,29 @@ class HeimaEngine:
         previous_reason: str | None,
         reason: str,
         phase: str,
+        manual_override_source: str | None,
         target_temperature: float | None,
         apply_allowed: bool,
         skip_small_delta: bool,
     ) -> None:
+        if self._heating_last_reported_branch is None:
+            self._heating_last_reported_branch = selected_branch
+        elif self._heating_last_reported_branch != selected_branch:
+            self._queue_event(
+                HeimaEvent(
+                    type="heating.branch_changed",
+                    key="heating.branch_changed",
+                    severity="info",
+                    title="Heating branch changed",
+                    message=f"Heating branch changed to '{selected_branch}'.",
+                    context={
+                        "previous": self._heating_last_reported_branch,
+                        "current": selected_branch,
+                    },
+                )
+            )
+            self._heating_last_reported_branch = selected_branch
+
         if selected_branch == "vacation_curve" and self._heating_last_reported_phase != phase:
             self._queue_event(
                 HeimaEvent(
@@ -705,7 +739,10 @@ class HeimaEngine:
                     severity="info",
                     title="Heating blocked by manual override",
                     message="Heating apply skipped because manual override is active.",
-                    context={"branch": selected_branch},
+                    context={
+                        "branch": selected_branch,
+                        "source": manual_override_source or "unknown",
+                    },
                 )
             )
 
@@ -757,11 +794,16 @@ class HeimaEngine:
         selected_branch: str,
         phase: str,
         vacation_meta: dict[str, Any],
+        temperature_step: float,
     ) -> None:
         if selected_branch != "vacation_curve" or not vacation_meta:
             return
 
-        delay_s = self._heating_vacation_recheck_delay_s(phase=phase, vacation_meta=vacation_meta)
+        delay_s = self._heating_vacation_recheck_delay_s(
+            phase=phase,
+            vacation_meta=vacation_meta,
+            temperature_step=temperature_step,
+        )
         if delay_s is None:
             return
         self._schedule_timed_recheck_deadline(
@@ -772,27 +814,94 @@ class HeimaEngine:
         )
 
     @staticmethod
-    def _heating_vacation_recheck_delay_s(*, phase: str, vacation_meta: dict[str, Any]) -> float | None:
-        phase_boundary_candidates: list[float] = []
+    def _heating_vacation_recheck_delay_s(
+        *,
+        phase: str,
+        vacation_meta: dict[str, Any],
+        temperature_step: float,
+    ) -> float | None:
+        candidates: list[float] = []
         if phase == "ramp_down":
             remaining_h = float(vacation_meta["ramp_down_h"]) - float(vacation_meta["hours_from_start"])
             if remaining_h > 0:
-                phase_boundary_candidates.append(remaining_h * 3600)
-            phase_boundary_candidates.append(15 * 60)
+                candidates.append(remaining_h * 3600)
+            exact_change = HeimaEngine._heating_vacation_next_quantized_change_delay_s(
+                phase=phase,
+                vacation_meta=vacation_meta,
+                temperature_step=temperature_step,
+            )
+            if exact_change is not None:
+                candidates.append(exact_change)
         elif phase == "cruise":
             remaining_h = float(vacation_meta["hours_to_end"]) - float(vacation_meta["ramp_up_h"])
             if remaining_h > 0:
-                phase_boundary_candidates.append(remaining_h * 3600)
+                candidates.append(remaining_h * 3600)
         elif phase == "ramp_up":
             remaining_h = float(vacation_meta["hours_to_end"])
             if remaining_h > 0:
-                phase_boundary_candidates.append(remaining_h * 3600)
-            phase_boundary_candidates.append(15 * 60)
+                candidates.append(remaining_h * 3600)
+            exact_change = HeimaEngine._heating_vacation_next_quantized_change_delay_s(
+                phase=phase,
+                vacation_meta=vacation_meta,
+                temperature_step=temperature_step,
+            )
+            if exact_change is not None:
+                candidates.append(exact_change)
 
-        if not phase_boundary_candidates:
+        if not candidates:
             return None
-        delay_s = min(candidate for candidate in phase_boundary_candidates if candidate > 0)
+        delay_s = min(candidate for candidate in candidates if candidate > 0)
         return max(1.0, float(delay_s))
+
+    @staticmethod
+    def _heating_vacation_next_quantized_change_delay_s(
+        *,
+        phase: str,
+        vacation_meta: dict[str, Any],
+        temperature_step: float,
+    ) -> float | None:
+        if temperature_step <= 0:
+            return None
+
+        raw_target = float(vacation_meta.get("raw_target", 0.0))
+        quantized_target = float(vacation_meta.get("quantized_target", 0.0))
+        slope_per_hour = 0.0
+
+        if phase == "ramp_down":
+            ramp_down_h = float(vacation_meta.get("ramp_down_h", 0.0))
+            if ramp_down_h <= 0:
+                return None
+            slope_per_hour = (
+                float(vacation_meta.get("min_safety", 0.0)) - float(vacation_meta.get("start_temp", 0.0))
+            ) / ramp_down_h
+        elif phase == "ramp_up":
+            ramp_up_h = float(vacation_meta.get("ramp_up_h", 0.0))
+            if ramp_up_h <= 0:
+                return None
+            slope_per_hour = (
+                float(vacation_meta.get("comfort_temp", 0.0)) - float(vacation_meta.get("min_safety", 0.0))
+            ) / ramp_up_h
+        else:
+            return None
+
+        if slope_per_hour == 0:
+            return None
+
+        half_step = temperature_step / 2.0
+        if slope_per_hour < 0:
+            threshold = quantized_target - half_step
+            if raw_target < threshold:
+                threshold -= temperature_step
+            delta = raw_target - threshold
+        else:
+            threshold = quantized_target + half_step
+            if raw_target > threshold:
+                threshold += temperature_step
+            delta = threshold - raw_target
+
+        if delta <= 0:
+            return 1.0
+        return max(1.0, float(delta / abs(slope_per_hour) * 3600))
 
     def _finalize_heating_target(
         self,
@@ -800,14 +909,13 @@ class HeimaEngine:
         branch_reason: str,
         target_temperature: float,
         apply_mode: str,
-        manual_guard_enabled: bool,
-        manual_hold: bool,
+        manual_override_active: bool,
         current_setpoint: float | None,
         temperature_step: float,
     ) -> tuple[str, str, bool, bool, bool, bool]:
         if apply_mode != "set_temperature":
             return ("delegated", "apply_mode_delegate_to_scheduler", False, False, False, False)
-        if manual_guard_enabled and manual_hold:
+        if manual_override_active:
             return ("blocked", "manual_override_blocked", False, True, False, False)
 
         diff = (
@@ -920,6 +1028,22 @@ class HeimaEngine:
     def _current_climate_setpoint(self, entity_id: str) -> float | None:
         return self._coerce_positive_float(self._state_attr(entity_id, "temperature"), default=None)
 
+    @staticmethod
+    def _heating_climate_manual_override_detected(preset_mode: str | None) -> bool:
+        if not preset_mode:
+            return False
+        normalized = preset_mode.casefold().replace(" ", "").replace("_", "").replace("-", "")
+        if normalized in {"", "none", "null", "schedule", "scheduled", "auto"}:
+            return False
+        return normalized in {
+            "hold",
+            "manual",
+            "manualhold",
+            "override",
+            "permanenthold",
+            "temporaryhold",
+        }
+
     def _state_attr(self, entity_id: str | None, attr_name: str) -> Any:
         if not entity_id:
             return None
@@ -951,6 +1075,13 @@ class HeimaEngine:
         if obs.state == "unknown":
             return None
         return obs.state == "on"
+
+    @staticmethod
+    def _coerce_text(value: Any) -> str | None:
+        if value in (None, ""):
+            return None
+        text = str(value).strip()
+        return text or None
 
     @staticmethod
     def _coerce_positive_float(value: Any, *, default: float | None) -> float | None:

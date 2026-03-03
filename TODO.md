@@ -67,9 +67,10 @@
 - [x] Add shared Runtime Scheduler and migrate all timed rechecks (occupancy, security, heating) onto it.
 - [x] Add automated runtime + HA e2e coverage for Heating MVP and scheduler-driven vacation rechecks.
 - [ ] Refine manual override detection beyond canonical `heima_heating_manual_hold` (thermostat-native/manual preset inference).
+- [x] Refine manual override detection beyond canonical `heima_heating_manual_hold` (thermostat-native/manual preset inference).
 - [ ] Decide and implement the fate of `heima.set_mode` (real behavior or removal).
-- [ ] Add `heating.branch_changed` only if we decide the extra event is operationally useful.
-- [ ] Improve `vacation_curve` next-check precision from phase-aware scheduling to exact next quantized target-change timing.
+- [x] Add `heating.branch_changed` only if we decide the extra event is operationally useful.
+- [x] Improve `vacation_curve` next-check precision from phase-aware scheduling to exact next quantized target-change timing.
 - [ ] Explicitly document that v1 `scheduler_delegate` means “Heima yields to external scheduler” (no direct scheduler integration).
 - [ ] Keep retry/verify logic out of Heima v1; if revisited, treat it as a future optional enhancement, not a current task.
 
