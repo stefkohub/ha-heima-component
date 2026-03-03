@@ -34,6 +34,9 @@ This folder contains the canonical, versioned specifications for the Heima Home 
 - **Heating Domain Mini-SPEC v1** — Scheduler-following baseline, fixed vacation override branch, apply guards, diagnostics  
   File: `heima_domain_heating_spec_v1.md`
 
+- **House-State Override Service Mini-SPEC v1** — Concrete v1 semantics for `heima.set_mode` as a final house-state override  
+  File: `heima_house_state_override_service_spec_v1.md`
+
 - **Policy Plugin Framework Mini-SPEC v1** — Future cross-domain policy extension model (separate from normalization plugins)  
   File: `heima_policy_plugin_framework_spec_v1.md`
 
@@ -87,6 +90,7 @@ docs/
     heima_runtime_scheduler_spec_v1.md
     heima_mapping_model_spec_v1.md
     heima_domain_heating_spec_v1.md
+    heima_house_state_override_service_spec_v1.md
     heima_policy_plugin_framework_spec_v1.md
     heima_extension_strategy_spec_v1_solution_a.md
     INDEX.md

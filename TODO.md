@@ -5,7 +5,8 @@
 - Completed: `Phase 2`
 - In Progress: `Phase 3` (category toggles + centralized gating implemented; final catalog/heating coverage pending)
 - In Progress: `Normalization Layer` (`N1-N4` completed; `N5` advanced built-ins + fallback/diagnostics underway)
-- Next: finish `Phase 3` residual catalog coverage, decide whether to close `N5` for merge or expand it further before `Phase 4`
+- In Progress: `Phase 4` (Heating MVP runtime, vacation curve, observability, and shared runtime scheduler implemented)
+- Next: close remaining `Phase 3` catalog items, finish Heating v1 deferred refinements, then move to `Phase 5`
 
 ## Roadmap (with Normalization Rollout)
 
@@ -57,10 +58,20 @@
 - [x] N5 Broadening Step 3: expose reusable strategy configuration contracts for additional non-presence domains (security, house state, future constraints/heating).
 
 6. [ ] Phase 4 — Heating Domain (Safe Apply)
-- Implement base intents (`auto`, `eco`, `comfort`, `preheat`, `off`).
-- Support apply modes (`delegate_to_scheduler`, `set_temperature`).
-- Add manual override guard, verification/retry, and rate limiting.
-- Emit `heating.*` events.
+- [x] Replace the legacy heating-intent model with fixed built-in branches keyed by `house_state`.
+- [x] Implement apply modes (`delegate_to_scheduler`, `set_temperature`).
+- [x] Add safe apply baseline: manual hold guard, small-delta skip, rate limiting, idempotence, startup race tolerance.
+- [x] Implement `fixed_target` branch.
+- [x] Implement `vacation_curve` branch with outdoor-temp safety floor, phase progression, and target quantization.
+- [x] Add Heating observability sensors (`branch`, `current_setpoint`, `last_applied_target`) and core `heating.*` runtime events.
+- [x] Add shared Runtime Scheduler and migrate all timed rechecks (occupancy, security, heating) onto it.
+- [x] Add automated runtime + HA e2e coverage for Heating MVP and scheduler-driven vacation rechecks.
+- [ ] Refine manual override detection beyond canonical `heima_heating_manual_hold` (thermostat-native/manual preset inference).
+- [ ] Decide and implement the fate of `heima.set_mode` (real behavior or removal).
+- [ ] Add `heating.branch_changed` only if we decide the extra event is operationally useful.
+- [ ] Improve `vacation_curve` next-check precision from phase-aware scheduling to exact next quantized target-change timing.
+- [ ] Explicitly document that v1 `scheduler_delegate` means “Heima yields to external scheduler” (no direct scheduler integration).
+- [ ] Keep retry/verify logic out of Heima v1; if revisited, treat it as a future optional enhancement, not a current task.
 
 7. [ ] Phase 5 — Security Domain (Read-Only) + Constraints Layer
 - Normalize security state and reason.
@@ -114,3 +125,4 @@
   - added Input Normalization Layer mini-spec (shared contracts/facade + plugin-based fusion registry + incremental rollout N1-N5) to avoid fragmented smart-policy implementations on raw HA states
   - added Heating Domain mini-spec (scheduler baseline + fixed vacation override branch)
   - added Policy Plugin Framework mini-spec (future cross-domain policy extension, distinct from normalization plugins)
+  - added Runtime Scheduler mini-spec and implemented the shared scheduler as the timing substrate for occupancy dwell, mismatch persistence, and Heating timed branches
