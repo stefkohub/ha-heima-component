@@ -1,0 +1,286 @@
+# Heima Full Debug Dashboard (Lovelace YAML)
+# Usage:
+# 1) Dashboard -> Edit -> Add card -> Manual
+# 2) Paste this YAML
+# 3) Replace placeholder ids (people, rooms, zones, climate entity-related room names)
+#
+# This dashboard is intended for real validation of:
+# - house_state and overrides
+# - people / anonymous presence
+# - room occupancy and lighting
+# - heating branches / targets / guards
+# - event pipeline outputs
+# - direct service calls for testing
+
+type: vertical-stack
+cards:
+  - type: markdown
+    content: |
+      ## Heima Full Debug
+      Replace placeholders (`stefano`, `living_room`, `living_zone`, etc.) before use.
+
+  - type: entities
+    title: Core Runtime
+    show_header_toggle: false
+    entities:
+      - entity: sensor.heima_house_state
+      - entity: sensor.heima_house_state_reason
+      - entity: binary_sensor.heima_anyone_home
+      - entity: sensor.heima_people_count
+      - entity: sensor.heima_people_home_list
+      - entity: sensor.heima_last_event
+      - entity: sensor.heima_event_stats
+
+  - type: entities
+    title: House-State Override
+    show_header_toggle: false
+    entities:
+      - entity: sensor.heima_house_state
+      - entity: sensor.heima_house_state_reason
+
+  - type: grid
+    title: House-State Override Controls
+    columns: 3
+    square: false
+    cards:
+      - type: button
+        name: Force Vacation
+        icon: mdi:beach
+        tap_action:
+          action: call-service
+          service: heima.set_mode
+          data:
+            mode: vacation
+            state: true
+
+      - type: button
+        name: Clear Vacation
+        icon: mdi:beach-off
+        tap_action:
+          action: call-service
+          service: heima.set_mode
+          data:
+            mode: vacation
+            state: false
+
+      - type: button
+        name: Force Relax
+        icon: mdi:sofa
+        tap_action:
+          action: call-service
+          service: heima.set_mode
+          data:
+            mode: relax
+            state: true
+
+  - type: entities
+    title: People
+    show_header_toggle: false
+    entities:
+      - entity: binary_sensor.heima_person_stefano_home
+      - entity: sensor.heima_person_stefano_confidence
+      - entity: sensor.heima_person_stefano_source
+      - entity: select.heima_person_stefano_override
+      - entity: binary_sensor.heima_person_testperson_home
+      - entity: sensor.heima_person_testperson_confidence
+      - entity: sensor.heima_person_testperson_source
+      - entity: select.heima_person_testperson_override
+      - entity: binary_sensor.heima_anonymous_presence
+      - entity: sensor.heima_anonymous_presence_confidence
+      - entity: sensor.heima_anonymous_presence_source
+
+  - type: entities
+    title: Occupancy
+    show_header_toggle: false
+    entities:
+      - entity: binary_sensor.heima_occupancy_living_room
+      - entity: sensor.heima_occupancy_living_room_source
+      - entity: sensor.heima_occupancy_living_room_last_change
+      - entity: binary_sensor.heima_occupancy_studio
+      - entity: sensor.heima_occupancy_studio_source
+      - entity: sensor.heima_occupancy_studio_last_change
+      - entity: binary_sensor.heima_occ_zone_living_zone
+      - entity: binary_sensor.heima_occ_zone_work_zone
+
+  - type: entities
+    title: Lighting
+    show_header_toggle: false
+    entities:
+      - entity: select.heima_lighting_intent_living_zone
+      - entity: select.heima_lighting_intent_work_zone
+      - entity: binary_sensor.heima_lighting_manual_hold_living_room
+      - entity: binary_sensor.heima_lighting_manual_hold_studio
+
+  - type: grid
+    title: Lighting Controls
+    columns: 2
+    square: false
+    cards:
+      - type: button
+        name: Living Auto
+        icon: mdi:theme-light-dark
+        tap_action:
+          action: call-service
+          service: heima.command
+          data:
+            command: set_lighting_intent
+            target:
+              zone_id: living_zone
+            params:
+              intent: auto
+
+      - type: button
+        name: Living Relax
+        icon: mdi:sofa-outline
+        tap_action:
+          action: call-service
+          service: heima.command
+          data:
+            command: set_lighting_intent
+            target:
+              zone_id: living_zone
+            params:
+              intent: scene_relax
+
+      - type: button
+        name: Hold Living ON
+        icon: mdi:hand-back-right-outline
+        tap_action:
+          action: call-service
+          service: heima.command
+          data:
+            command: set_room_lighting_hold
+            target:
+              room_id: living_room
+            params:
+              state: true
+
+      - type: button
+        name: Hold Living OFF
+        icon: mdi:hand-back-right-off-outline
+        tap_action:
+          action: call-service
+          service: heima.command
+          data:
+            command: set_room_lighting_hold
+            target:
+              room_id: living_room
+            params:
+              state: false
+
+  - type: entities
+    title: Heating
+    show_header_toggle: false
+    entities:
+      - entity: sensor.heima_heating_state
+      - entity: sensor.heima_heating_reason
+      - entity: sensor.heima_heating_phase
+      - entity: sensor.heima_heating_branch
+      - entity: sensor.heima_heating_target_temp
+      - entity: sensor.heima_heating_current_setpoint
+      - entity: sensor.heima_heating_last_applied_target
+      - entity: binary_sensor.heima_heating_manual_hold
+      - entity: binary_sensor.heima_heating_applying_guard
+
+  - type: grid
+    title: Heating Controls
+    columns: 2
+    square: false
+    cards:
+      - type: button
+        name: Heating Hold ON
+        icon: mdi:radiator-off
+        tap_action:
+          action: call-service
+          service: heima.set_override
+          data:
+            scope: heating
+            id: main
+            override: true
+
+      - type: button
+        name: Heating Hold OFF
+        icon: mdi:radiator
+        tap_action:
+          action: call-service
+          service: heima.set_override
+          data:
+            scope: heating
+            id: main
+            override: false
+
+      - type: button
+        name: Force Away
+        icon: mdi:home-export-outline
+        tap_action:
+          action: call-service
+          service: heima.set_mode
+          data:
+            mode: away
+            state: true
+
+      - type: button
+        name: Clear Away
+        icon: mdi:home-import-outline
+        tap_action:
+          action: call-service
+          service: heima.set_mode
+          data:
+            mode: away
+            state: false
+
+  - type: entities
+    title: Security
+    show_header_toggle: false
+    entities:
+      - entity: sensor.heima_security_state
+      - entity: sensor.heima_security_reason
+
+  - type: history-graph
+    title: Heima Signals
+    hours_to_show: 6
+    refresh_interval: 30
+    entities:
+      - entity: sensor.heima_house_state
+      - entity: binary_sensor.heima_anyone_home
+      - entity: binary_sensor.heima_occupancy_studio
+      - entity: sensor.heima_heating_state
+      - entity: sensor.heima_heating_target_temp
+
+  - type: grid
+    title: Runtime Commands
+    columns: 2
+    square: false
+    cards:
+      - type: button
+        name: Recompute Now
+        icon: mdi:refresh
+        tap_action:
+          action: call-service
+          service: heima.command
+          data:
+            command: recompute_now
+
+      - type: button
+        name: Notify Test Event
+        icon: mdi:bell-outline
+        tap_action:
+          action: call-service
+          service: heima.command
+          data:
+            command: notify_event
+            params:
+              type: debug.manual_test
+              key: debug.manual_test
+              severity: info
+              title: Heima Debug Test
+              message: Manual debug event from dashboard
+              context:
+                source: heima_debug_dashboard_full
+
+  - type: markdown
+    content: |
+      ### Notes
+      - Some existing HA installations may still use legacy entity ids such as `binary_sensor.heima_occupancy_<room>` instead of `binary_sensor.heima_occ_<room>`.
+      - If a button does not match your config, update the placeholder ids.
+      - `heima.set_mode` now forces the final `house_state` until you clear the same override.
