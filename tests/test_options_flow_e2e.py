@@ -48,6 +48,32 @@ async def test_rooms_flow_persists_actuation_only_room_with_save_and_close():
 
 
 @pytest.mark.asyncio
+async def test_general_flow_persists_house_signal_bindings():
+    flow = _flow()
+
+    result = await flow.async_step_general(
+        {
+            "engine_enabled": True,
+            "timezone": "Europe/Rome",
+            "language": "it",
+            "lighting_apply_mode": "scene",
+            "vacation_mode_entity": "input_boolean.vacation_mode",
+            "guest_mode_entity": "",
+            "sleep_window_entity": "binary_sensor.sleep_window",
+            "relax_mode_entity": "binary_sensor.relax_mode",
+            "work_window_entity": "binary_sensor.work_window",
+        }
+    )
+    assert result["type"] == "menu"
+    assert flow.options["house_signals"] == {
+        "vacation_mode": "input_boolean.vacation_mode",
+        "sleep_window": "binary_sensor.sleep_window",
+        "relax_mode": "binary_sensor.relax_mode",
+        "work_window": "binary_sensor.work_window",
+    }
+
+
+@pytest.mark.asyncio
 async def test_lighting_room_edit_flow_can_clear_scenes_and_persist_on_save():
     flow = _flow(
         {

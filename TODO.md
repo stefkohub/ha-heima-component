@@ -6,6 +6,7 @@
 - In Progress: `Phase 3` (category toggles + centralized gating implemented; final catalog/heating coverage pending)
 - In Progress: `Normalization Layer` (`N1-N4` completed; `N5` materially complete for current rollout, future providers still open)
 - In Progress: `Phase 4` (Heating MVP implemented, scheduler-backed, and service semantics aligned; final polish/documentation remains)
+- Completed: configurable house-signal bindings (no hardcoded helper entity assumptions in house-state resolution)
 - Next: close remaining `Phase 3` catalog items, validate Heating in HA, then move to `Phase 5`
 
 ## Roadmap (with Normalization Rollout)

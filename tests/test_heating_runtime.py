@@ -65,6 +65,14 @@ def _build_engine(
     return engine
 
 
+def _with_house_signal_binding(options: dict, **bindings: str) -> dict:
+    merged = dict(options)
+    current = dict(merged.get("house_signals", {}))
+    current.update({key: value for key, value in bindings.items() if value})
+    merged["house_signals"] = current
+    return merged
+
+
 @pytest.mark.asyncio
 async def test_fixed_target_branch_builds_and_executes_heating_apply_step():
     options = {
@@ -241,7 +249,8 @@ def test_heating_vacation_recheck_delay_prefers_next_quantized_target_change():
 
 @pytest.mark.asyncio
 async def test_vacation_curve_branch_computes_target_and_executes_apply():
-    options = {
+    options = _with_house_signal_binding(
+        {
         "heating": {
             "climate_entity": "climate.test_thermostat",
             "apply_mode": "set_temperature",
@@ -264,7 +273,9 @@ async def test_vacation_curve_branch_computes_target_and_executes_apply():
                 }
             },
         }
-    }
+    },
+        vacation_mode="input_boolean.vacation_mode",
+    )
     engine = _build_engine(
         options,
         {
@@ -308,7 +319,8 @@ async def test_vacation_curve_branch_computes_target_and_executes_apply():
 
 @pytest.mark.asyncio
 async def test_heating_runtime_emits_phase_and_target_events_for_vacation_curve():
-    options = {
+    options = _with_house_signal_binding(
+        {
         "heating": {
             "climate_entity": "climate.test_thermostat",
             "apply_mode": "set_temperature",
@@ -331,7 +343,9 @@ async def test_heating_runtime_emits_phase_and_target_events_for_vacation_curve(
                 }
             },
         }
-    }
+    },
+        vacation_mode="input_boolean.vacation_mode",
+    )
     engine = _build_engine(
         options,
         {
@@ -357,7 +371,8 @@ async def test_heating_runtime_emits_phase_and_target_events_for_vacation_curve(
 
 @pytest.mark.asyncio
 async def test_heating_runtime_emits_branch_changed_event_on_transition():
-    options = {
+    options = _with_house_signal_binding(
+        {
         "heating": {
             "climate_entity": "climate.test_thermostat",
             "apply_mode": "set_temperature",
@@ -381,7 +396,9 @@ async def test_heating_runtime_emits_branch_changed_event_on_transition():
             "vacation_total_hours_entity": "sensor.vacation_total",
             "vacation_is_long_entity": "binary_sensor.vacation_long",
         }
-    }
+    },
+        vacation_mode="input_boolean.vacation_mode",
+    )
     engine = _build_engine(
         options,
         {
@@ -439,7 +456,8 @@ async def test_heating_runtime_emits_manual_override_blocked_event_once_per_tran
 
 
 def test_vacation_curve_without_required_bindings_is_inactive():
-    options = {
+    options = _with_house_signal_binding(
+        {
         "heating": {
             "climate_entity": "climate.test_thermostat",
             "apply_mode": "set_temperature",
@@ -457,7 +475,9 @@ def test_vacation_curve_without_required_bindings_is_inactive():
                 }
             },
         }
-    }
+    },
+        vacation_mode="input_boolean.vacation_mode",
+    )
     engine = _build_engine(
         options,
         {
@@ -478,7 +498,8 @@ def test_vacation_curve_without_required_bindings_is_inactive():
 
 @pytest.mark.asyncio
 async def test_heating_runtime_emits_vacation_bindings_unavailable_event_once_per_transition():
-    options = {
+    options = _with_house_signal_binding(
+        {
         "heating": {
             "climate_entity": "climate.test_thermostat",
             "apply_mode": "set_temperature",
@@ -496,7 +517,9 @@ async def test_heating_runtime_emits_vacation_bindings_unavailable_event_once_pe
                 }
             },
         }
-    }
+    },
+        vacation_mode="input_boolean.vacation_mode",
+    )
     engine = _build_engine(
         options,
         {

@@ -120,15 +120,27 @@ Allowed values:
 7. home
 
 ### Determination rules (v1)
-1. `vacation_mode` → `vacation`
-2. `guest_mode` → `guest`
+1. configured `vacation_mode` house signal = `on` → `vacation`
+2. configured `guest_mode` house signal = `on` → `guest`
 3. `anyone_home == off` → `away`
-4. `sleep_window == on` → `sleeping`
-5. `relax == on` → `relax`
-6. `work_window == on` → `working`
+4. configured `sleep_window` house signal = `on` → `sleeping`
+5. configured `relax_mode` house signal = `on` → `relax`
+6. configured `work_window` house signal = `on` → `working`
 7. default → `home`
 
 Unnamed presence counts as `anyone_home = on`.
+
+### House signal bindings (v1)
+The mode/window signals used by house-state resolution are not hardcoded helper entity ids.
+They must be explicitly configured in the Options Flow `General` step under:
+
+- `vacation_mode_entity`
+- `guest_mode_entity`
+- `sleep_window_entity`
+- `relax_mode_entity`
+- `work_window_entity`
+
+If a binding is omitted, that signal is treated as inactive (`off`).
 
 ---
 

@@ -17,7 +17,13 @@
         "data": {
           "engine_enabled": "Abilita motore",
           "timezone": "Fuso orario",
-          "language": "Lingua"
+          "language": "Lingua",
+          "lighting_apply_mode": "Modalita apply illuminazione",
+          "vacation_mode_entity": "Entita modalita vacanza",
+          "guest_mode_entity": "Entita modalita ospiti",
+          "sleep_window_entity": "Entita finestra sonno",
+          "relax_mode_entity": "Entita modalita relax",
+          "work_window_entity": "Entita finestra lavoro"
         }
       },
       "people_menu": {
@@ -198,13 +204,14 @@
         "title": "Riscaldamento",
         "data": {
           "climate_entity": "Entita climate",
-          "apply_mode_auto": "Modalita apply",
-          "setpoint_eco": "Setpoint eco",
-          "setpoint_comfort": "Setpoint comfort",
-          "setpoint_preheat": "Setpoint preheat",
-          "min_seconds_between_commands": "Secondi minimi tra comandi",
-          "verify_after_s": "Verifica dopo (s)",
-          "max_retries": "Retry massimi"
+          "apply_mode": "Modalita apply",
+          "temperature_step": "Step temperatura",
+          "manual_override_guard": "Blocca con override manuale",
+          "outdoor_temperature_entity": "Entita temperatura esterna",
+          "vacation_hours_from_start_entity": "Entita ore vacanza da inizio",
+          "vacation_hours_to_end_entity": "Entita ore vacanza a fine",
+          "vacation_total_hours_entity": "Entita ore totali vacanza",
+          "vacation_is_long_entity": "Entita vacanza lunga"
         }
       },
       "security": {
@@ -223,6 +230,33 @@
           "dedup_window_s": "Finestra dedup (s)",
           "rate_limit_per_key_s": "Rate limit per key (s)"
         }
+      },
+      "heating_branches_menu": {
+        "title": "Branch Override Riscaldamento",
+        "menu_options": {
+          "heating_branches_edit": "Modifica branch",
+          "heating_branches_save": "Salva e continua"
+        }
+      },
+      "heating_branches_edit": {
+        "title": "Seleziona Stato Casa",
+        "data": {
+          "house_state": "Stato casa"
+        }
+      },
+      "heating_branch_edit_form": {
+        "title": "Modifica Branch Riscaldamento",
+        "data": {
+          "house_state": "Stato casa",
+          "branch": "Branch",
+          "target_temperature": "Temperatura target",
+          "vacation_ramp_down_h": "Ore ramp-down vacanza",
+          "vacation_ramp_up_h": "Ore ramp-up vacanza",
+          "vacation_min_temp": "Temperatura minima vacanza",
+          "vacation_comfort_temp": "Temperatura comfort vacanza",
+          "vacation_start_temp": "Temperatura iniziale vacanza",
+          "vacation_min_total_hours_for_ramp": "Ore totali minime per ramp vacanza"
+        }
       }
     },
     "error": {
@@ -231,7 +265,9 @@
       "invalid_required": "Il numero richiesto deve essere minore o uguale alle sorgenti",
       "reserved_prefix": "Il valore non puo iniziare con 'heima_'",
       "invalid_time_zone": "Fuso orario non valido",
-      "invalid_slug": "Slug non valido"
+      "invalid_slug": "Slug non valido",
+      "invalid_number": "Inserisci un numero positivo valido",
+      "missing_vacation_bindings": "La configurazione generale del riscaldamento deve includere tutti i binding di timing vacanza e temperatura esterna"
     }
   }
 }

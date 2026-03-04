@@ -30,10 +30,12 @@ from .const import (
     DEFAULT_SECURITY_MISMATCH_POLICY,
     DEFAULT_LIGHTING_APPLY_MODE,
     DOMAIN,
+    HOUSE_SIGNAL_NAMES,
     EVENT_CATEGORIES_TOGGLEABLE,
     OCCUPANCY_MISMATCH_POLICIES,
     SECURITY_MISMATCH_POLICIES,
     OPT_HEATING,
+    OPT_HOUSE_SIGNALS,
     OPT_LIGHTING_APPLY_MODE,
     OPT_LIGHTING_ROOMS,
     OPT_LIGHTING_ZONES,
@@ -90,6 +92,21 @@ def _format_source_weights(weights: Any) -> str:
             continue
         lines.append(f"{entity_id}={rendered:g}")
     return "\n".join(lines)
+
+
+def _normalize_house_signal_bindings(value: Any) -> dict[str, str]:
+    """Normalize configured house-signal entity bindings."""
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for signal_name in HOUSE_SIGNAL_NAMES:
+        raw = value.get(signal_name)
+        if raw in (None, ""):
+            continue
+        entity_id = str(raw).strip()
+        if entity_id:
+            normalized[signal_name] = entity_id
+    return normalized
 
 
 def _is_valid_slug(value: str) -> bool:
@@ -374,28 +391,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         return await self.async_step_general(user_input)
 
     async def async_step_general(self, user_input=None) -> FlowResult:
-        schema = vol.Schema(
-            {
-                vol.Optional(
-                    CONF_ENGINE_ENABLED,
-                    default=self.options.get(CONF_ENGINE_ENABLED, DEFAULT_ENGINE_ENABLED),
-                ): bool,
-                vol.Optional(
-                    CONF_TIMEZONE,
-                    default=self.options.get(CONF_TIMEZONE, _default_timezone(self.hass)),
-                ): cv.string,
-                vol.Optional(
-                    CONF_LANGUAGE,
-                    default=self.options.get(CONF_LANGUAGE, _default_language(self.hass)),
-                ): cv.string,
-                vol.Optional(
-                    OPT_LIGHTING_APPLY_MODE,
-                    default=self.options.get(
-                        OPT_LIGHTING_APPLY_MODE, DEFAULT_LIGHTING_APPLY_MODE
-                    ),
-                ): vol.In(LIGHTING_APPLY_MODES),
-            }
-        )
+        schema = self._general_schema()
         if user_input is None:
             return self.async_show_form(step_id="general", data_schema=schema)
 
@@ -415,7 +411,58 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
         self.options[OPT_LIGHTING_APPLY_MODE] = user_input.get(
             OPT_LIGHTING_APPLY_MODE, DEFAULT_LIGHTING_APPLY_MODE
         )
+        self.options[OPT_HOUSE_SIGNALS] = self._normalize_general_house_signals(user_input)
         return await self.async_step_people_menu()
+
+    def _general_schema(self) -> vol.Schema:
+        schema_map: dict[Any, Any] = {
+            vol.Optional(
+                CONF_ENGINE_ENABLED,
+                default=self.options.get(CONF_ENGINE_ENABLED, DEFAULT_ENGINE_ENABLED),
+            ): bool,
+            vol.Optional(
+                CONF_TIMEZONE,
+                default=self.options.get(CONF_TIMEZONE, _default_timezone(self.hass)),
+            ): cv.string,
+            vol.Optional(
+                CONF_LANGUAGE,
+                default=self.options.get(CONF_LANGUAGE, _default_language(self.hass)),
+            ): cv.string,
+            vol.Optional(
+                OPT_LIGHTING_APPLY_MODE,
+                default=self.options.get(
+                    OPT_LIGHTING_APPLY_MODE, DEFAULT_LIGHTING_APPLY_MODE
+                ),
+            ): vol.In(LIGHTING_APPLY_MODES),
+        }
+        house_signals = self._house_signal_bindings()
+        for signal_name, label_key in (
+            ("vacation_mode", "vacation_mode_entity"),
+            ("guest_mode", "guest_mode_entity"),
+            ("sleep_window", "sleep_window_entity"),
+            ("relax_mode", "relax_mode_entity"),
+            ("work_window", "work_window_entity"),
+        ):
+            schema_map[
+                vol.Optional(
+                    label_key,
+                    default=house_signals.get(signal_name),
+                )
+            ] = _entity_selector(["input_boolean", "binary_sensor", "sensor"])
+        return vol.Schema(schema_map)
+
+    def _house_signal_bindings(self) -> dict[str, str]:
+        return _normalize_house_signal_bindings(self.options.get(OPT_HOUSE_SIGNALS, {}))
+
+    def _normalize_general_house_signals(self, user_input: dict[str, Any]) -> dict[str, str]:
+        raw = {
+            "vacation_mode": user_input.get("vacation_mode_entity"),
+            "guest_mode": user_input.get("guest_mode_entity"),
+            "sleep_window": user_input.get("sleep_window_entity"),
+            "relax_mode": user_input.get("relax_mode_entity"),
+            "work_window": user_input.get("work_window_entity"),
+        }
+        return _normalize_house_signal_bindings(raw)
 
     # ---- People (named + anonymous) ----
     async def async_step_people_menu(self, user_input=None) -> FlowResult:

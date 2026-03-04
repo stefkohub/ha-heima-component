@@ -24,6 +24,7 @@ from ..const import (
     DEFAULT_SECURITY_MISMATCH_POLICY,
     EVENT_CATEGORIES_ALL,
     OPT_HEATING,
+    OPT_HOUSE_SIGNALS,
     OPT_LIGHTING_APPLY_MODE,
     OPT_LIGHTING_ROOMS,
     OPT_LIGHTING_ZONES,
@@ -52,14 +53,6 @@ from .scheduler import ScheduledRuntimeJob
 from .state_store import CanonicalState
 
 _LOGGER = logging.getLogger(__name__)
-
-_HOUSE_SIGNAL_ENTITIES = {
-    "input_boolean.vacation_mode",
-    "input_boolean.guest_mode",
-    "binary_sensor.sleep_window",
-    "binary_sensor.relax_mode",
-    "binary_sensor.work_window",
-}
 
 _LIGHTING_MIN_SECONDS_BETWEEN_APPLIES = 10
 _HEATING_MIN_SECONDS_BETWEEN_APPLIES = 60
@@ -239,7 +232,7 @@ class HeimaEngine:
     def tracked_entity_ids(self) -> set[str]:
         """Entities that should trigger recomputation on state change."""
         options = dict(self._entry.options)
-        tracked: set[str] = set(_HOUSE_SIGNAL_ENTITIES)
+        tracked: set[str] = set(self._configured_house_signal_entities().values())
 
         for person in options.get(OPT_PEOPLE_NAMED, []):
             entity = person.get("person_entity")
@@ -275,6 +268,26 @@ class HeimaEngine:
                 tracked.add(str(value))
 
         return tracked
+
+    def _configured_house_signal_entities(self) -> dict[str, str]:
+        raw = self._entry.options.get(OPT_HOUSE_SIGNALS, {})
+        if not isinstance(raw, dict):
+            return {}
+        configured: dict[str, str] = {}
+        for signal_name in (
+            "vacation_mode",
+            "guest_mode",
+            "sleep_window",
+            "relax_mode",
+            "work_window",
+        ):
+            value = raw.get(signal_name)
+            if value in (None, ""):
+                continue
+            entity_id = str(value).strip()
+            if entity_id:
+                configured[signal_name] = entity_id
+        return configured
 
     def _build_default_state(self) -> None:
         registry = build_registry(self._entry)
@@ -419,25 +432,36 @@ class HeimaEngine:
                 "source_entity_id": None,
             }
 
+        house_signal_entities = self._configured_house_signal_entities()
         vacation_mode = self._compute_house_signal(
             "vacation_mode",
-            ["input_boolean.vacation_mode"],
+            [house_signal_entities["vacation_mode"]]
+            if "vacation_mode" in house_signal_entities
+            else [],
         )
         guest_mode = self._compute_house_signal(
             "guest_mode",
-            ["input_boolean.guest_mode"],
+            [house_signal_entities["guest_mode"]]
+            if "guest_mode" in house_signal_entities
+            else [],
         )
         sleep_window = self._compute_house_signal(
             "sleep_window",
-            ["binary_sensor.sleep_window"],
+            [house_signal_entities["sleep_window"]]
+            if "sleep_window" in house_signal_entities
+            else [],
         )
         relax_mode = self._compute_house_signal(
             "relax_mode",
-            ["binary_sensor.relax_mode"],
+            [house_signal_entities["relax_mode"]]
+            if "relax_mode" in house_signal_entities
+            else [],
         )
         work_window = self._compute_house_signal(
             "work_window",
-            ["binary_sensor.work_window"],
+            [house_signal_entities["work_window"]]
+            if "work_window" in house_signal_entities
+            else [],
         )
 
         derived_house_state, derived_house_reason = resolve_house_state(
@@ -2056,6 +2080,7 @@ class HeimaEngine:
             context={"source": "house_signal", "signal": trace_key},
         )
         self._house_signals_trace[trace_key] = {
+            "configured_entities": list(entity_ids),
             "source_observations": [obs.as_dict() for obs in observations],
             "fused_observation": fused.as_dict(),
             "plugin_id": fused.plugin_id,

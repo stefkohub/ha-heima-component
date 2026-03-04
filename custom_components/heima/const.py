@@ -22,9 +22,18 @@ OPT_ROOMS = "rooms"
 OPT_LIGHTING_ROOMS = "lighting_rooms"
 OPT_LIGHTING_ZONES = "lighting_zones"
 OPT_LIGHTING_APPLY_MODE = "lighting_apply_mode"
+OPT_HOUSE_SIGNALS = "house_signals"
 OPT_HEATING = "heating"
 OPT_SECURITY = "security"
 OPT_NOTIFICATIONS = "notifications"
+
+HOUSE_SIGNAL_NAMES = [
+    "vacation_mode",
+    "guest_mode",
+    "sleep_window",
+    "relax_mode",
+    "work_window",
+]
 
 DEFAULT_ENGINE_ENABLED = True
 DEFAULT_LIGHTING_APPLY_MODE = "scene"

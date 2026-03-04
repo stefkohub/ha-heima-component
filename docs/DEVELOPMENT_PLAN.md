@@ -97,6 +97,7 @@ Output:
   - room senza sensori (`occupancy_mode = none`) supportate
   - zone occupancy calcolata ignorando room non sensorizzate
   - input normalization layer plugin-first introdotto e usato nei path principali (occupancy, people quorum, house signals, security)
+  - house-state signal bindings (`vacation`, `guest`, `sleep`, `relax`, `work`) are configurable in the Options Flow instead of relying on hardcoded helper entity ids
   - occupancy plugin-first con dwell/max_on operativo e `weighted_quorum` disponibile
   - plugin layer esteso oltre la presenza:
     - corroborazione security (`boolean_signal`)

@@ -17,7 +17,13 @@
         "data": {
           "engine_enabled": "Enable engine",
           "timezone": "Timezone",
-          "language": "Language"
+          "language": "Language",
+          "lighting_apply_mode": "Lighting apply mode",
+          "vacation_mode_entity": "Vacation mode entity",
+          "guest_mode_entity": "Guest mode entity",
+          "sleep_window_entity": "Sleep window entity",
+          "relax_mode_entity": "Relax mode entity",
+          "work_window_entity": "Work window entity"
         }
       },
       "people_menu": {
@@ -198,13 +204,14 @@
         "title": "Heating",
         "data": {
           "climate_entity": "Climate entity",
-          "apply_mode_auto": "Apply mode",
-          "setpoint_eco": "Eco setpoint",
-          "setpoint_comfort": "Comfort setpoint",
-          "setpoint_preheat": "Preheat setpoint",
-          "min_seconds_between_commands": "Min seconds between commands",
-          "verify_after_s": "Verify after (s)",
-          "max_retries": "Max retries"
+          "apply_mode": "Apply mode",
+          "temperature_step": "Temperature step",
+          "manual_override_guard": "Block on manual override",
+          "outdoor_temperature_entity": "Outdoor temperature entity",
+          "vacation_hours_from_start_entity": "Vacation hours from start entity",
+          "vacation_hours_to_end_entity": "Vacation hours to end entity",
+          "vacation_total_hours_entity": "Vacation total hours entity",
+          "vacation_is_long_entity": "Vacation is long entity"
         }
       },
       "security": {
@@ -223,6 +230,33 @@
           "dedup_window_s": "Dedup window (s)",
           "rate_limit_per_key_s": "Rate limit per key (s)"
         }
+      },
+      "heating_branches_menu": {
+        "title": "Heating Override Branches",
+        "menu_options": {
+          "heating_branches_edit": "Edit branch",
+          "heating_branches_save": "Save and continue"
+        }
+      },
+      "heating_branches_edit": {
+        "title": "Select House State",
+        "data": {
+          "house_state": "House state"
+        }
+      },
+      "heating_branch_edit_form": {
+        "title": "Edit Heating Branch",
+        "data": {
+          "house_state": "House state",
+          "branch": "Branch",
+          "target_temperature": "Target temperature",
+          "vacation_ramp_down_h": "Vacation ramp-down hours",
+          "vacation_ramp_up_h": "Vacation ramp-up hours",
+          "vacation_min_temp": "Vacation minimum temperature",
+          "vacation_comfort_temp": "Vacation comfort temperature",
+          "vacation_start_temp": "Vacation start temperature",
+          "vacation_min_total_hours_for_ramp": "Vacation minimum total hours for ramp"
+        }
       }
     },
     "error": {
@@ -231,7 +265,9 @@
       "invalid_required": "Required count must be less than or equal to sources",
       "reserved_prefix": "Value cannot start with 'heima_'",
       "invalid_time_zone": "Invalid timezone",
-      "invalid_slug": "Invalid slug"
+      "invalid_slug": "Invalid slug",
+      "invalid_number": "Enter a valid positive number",
+      "missing_vacation_bindings": "Heating general configuration must include all vacation timing and outdoor temperature bindings"
     }
   }
 }

@@ -21,6 +21,14 @@ def _entry(options: dict) -> MockConfigEntry:
     )
 
 
+def _with_house_signals(options: dict, **bindings: str) -> dict:
+    merged = dict(options)
+    current = dict(merged.get("house_signals", {}))
+    current.update({key: value for key, value in bindings.items() if value})
+    merged["house_signals"] = current
+    return merged
+
+
 def _room_entity_state(hass: HomeAssistant, room_id: str):
     return hass.states.get(f"binary_sensor.heima_occupancy_{room_id}") or hass.states.get(
         f"binary_sensor.heima_occ_{room_id}"
@@ -450,7 +458,7 @@ async def test_e2e_house_signal_helpers_use_boolean_plugin_trace(
     hass: HomeAssistant,
     enable_custom_integrations,
 ):
-    entry = _entry({})
+    entry = _entry(_with_house_signals({}, relax_mode="binary_sensor.relax_mode"))
     entry.add_to_hass(hass)
 
     hass.states.async_set("binary_sensor.relax_mode", "on")
@@ -464,6 +472,36 @@ async def test_e2e_house_signal_helpers_use_boolean_plugin_trace(
     assert trace["plugin_id"] == "builtin.any_of"
     assert trace["used_plugin_fallback"] is False
     assert trace["fused_observation"]["state"] == "on"
+
+
+@pytest.mark.asyncio
+async def test_e2e_configured_work_window_binding_drives_working_house_state(
+    hass: HomeAssistant,
+    enable_custom_integrations,
+):
+    entry = _entry(
+        _with_house_signals(
+            {
+                "people_anonymous": {
+                    "enabled": True,
+                    "sources": ["binary_sensor.room_presence"],
+                    "required": 1,
+                    "anonymous_count_weight": 1,
+                }
+            },
+            work_window="binary_sensor.office_hours",
+        )
+    )
+    entry.add_to_hass(hass)
+
+    hass.states.async_set("binary_sensor.office_hours", "on")
+    hass.states.async_set("binary_sensor.room_presence", "on")
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get("sensor.heima_house_state").state == "working"
+    assert hass.states.get("sensor.heima_house_state_reason").state == "work_window"
 
 
 @pytest.mark.asyncio
@@ -581,30 +619,33 @@ async def test_e2e_heating_vacation_curve_branch_computes_and_applies_target(
     hass.services.async_register("climate", "set_temperature", _capture_climate_call)
 
     entry = _entry(
-        {
-            "heating": {
-                "climate_entity": "climate.test_thermostat",
-                "apply_mode": "set_temperature",
-                "temperature_step": 0.5,
-                "manual_override_guard": True,
-                "outdoor_temperature_entity": "sensor.outdoor_temp",
-                "vacation_hours_from_start_entity": "sensor.vacation_from",
-                "vacation_hours_to_end_entity": "sensor.vacation_to",
-                "vacation_total_hours_entity": "sensor.vacation_total",
-                "vacation_is_long_entity": "binary_sensor.vacation_long",
-                "override_branches": {
-                    "vacation": {
-                        "branch": "vacation_curve",
-                        "vacation_ramp_down_h": 8.0,
-                        "vacation_ramp_up_h": 10.0,
-                        "vacation_min_temp": 16.5,
-                        "vacation_comfort_temp": 19.5,
-                        "vacation_start_temp": 19.5,
-                        "vacation_min_total_hours_for_ramp": 24.0,
-                    }
-                },
-            }
-        }
+        _with_house_signals(
+            {
+                "heating": {
+                    "climate_entity": "climate.test_thermostat",
+                    "apply_mode": "set_temperature",
+                    "temperature_step": 0.5,
+                    "manual_override_guard": True,
+                    "outdoor_temperature_entity": "sensor.outdoor_temp",
+                    "vacation_hours_from_start_entity": "sensor.vacation_from",
+                    "vacation_hours_to_end_entity": "sensor.vacation_to",
+                    "vacation_total_hours_entity": "sensor.vacation_total",
+                    "vacation_is_long_entity": "binary_sensor.vacation_long",
+                    "override_branches": {
+                        "vacation": {
+                            "branch": "vacation_curve",
+                            "vacation_ramp_down_h": 8.0,
+                            "vacation_ramp_up_h": 10.0,
+                            "vacation_min_temp": 16.5,
+                            "vacation_comfort_temp": 19.5,
+                            "vacation_start_temp": 19.5,
+                            "vacation_min_total_hours_for_ramp": 24.0,
+                        }
+                    },
+                }
+            },
+            vacation_mode="input_boolean.vacation_mode",
+        )
     )
     entry.add_to_hass(hass)
 
@@ -798,30 +839,33 @@ async def test_e2e_heating_vacation_curve_registers_and_fires_scheduler_recheck(
     )
 
     entry = _entry(
-        {
-            "heating": {
-                "climate_entity": "climate.test_thermostat",
-                "apply_mode": "set_temperature",
-                "temperature_step": 0.5,
-                "manual_override_guard": True,
-                "outdoor_temperature_entity": "sensor.outdoor_temp",
-                "vacation_hours_from_start_entity": "sensor.vacation_from",
-                "vacation_hours_to_end_entity": "sensor.vacation_to",
-                "vacation_total_hours_entity": "sensor.vacation_total",
-                "vacation_is_long_entity": "binary_sensor.vacation_long",
-                "override_branches": {
-                    "vacation": {
-                        "branch": "vacation_curve",
-                        "vacation_ramp_down_h": 8.0,
-                        "vacation_ramp_up_h": 10.0,
-                        "vacation_min_temp": 16.5,
-                        "vacation_comfort_temp": 19.5,
-                        "vacation_start_temp": 19.5,
-                        "vacation_min_total_hours_for_ramp": 24.0,
+        _with_house_signals(
+            {
+                "heating": {
+                    "climate_entity": "climate.test_thermostat",
+                    "apply_mode": "set_temperature",
+                    "temperature_step": 0.5,
+                    "manual_override_guard": True,
+                    "outdoor_temperature_entity": "sensor.outdoor_temp",
+                    "vacation_hours_from_start_entity": "sensor.vacation_from",
+                    "vacation_hours_to_end_entity": "sensor.vacation_to",
+                    "vacation_total_hours_entity": "sensor.vacation_total",
+                    "vacation_is_long_entity": "binary_sensor.vacation_long",
+                    "override_branches": {
+                        "vacation": {
+                            "branch": "vacation_curve",
+                            "vacation_ramp_down_h": 8.0,
+                            "vacation_ramp_up_h": 10.0,
+                            "vacation_min_temp": 16.5,
+                            "vacation_comfort_temp": 19.5,
+                            "vacation_start_temp": 19.5,
+                            "vacation_min_total_hours_for_ramp": 24.0,
+                        }
                     }
                 },
-            }
-        }
+            },
+            vacation_mode="input_boolean.vacation_mode",
+        )
     )
     entry.add_to_hass(hass)
 

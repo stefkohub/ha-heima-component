@@ -43,6 +43,14 @@ Each step is independently editable after initial setup.
 - `engine_enabled` (bool, default: true)
 - `timezone` (string, default: HA timezone)
 - `language` (string, default: HA language)
+- `lighting_apply_mode` (enum: `scene`, `delegate`)
+
+Optional house-signal bindings:
+- `vacation_mode_entity` (entity picker: `input_boolean|binary_sensor|sensor`)
+- `guest_mode_entity` (entity picker: `input_boolean|binary_sensor|sensor`)
+- `sleep_window_entity` (entity picker: `input_boolean|binary_sensor|sensor`)
+- `relax_mode_entity` (entity picker: `input_boolean|binary_sensor|sensor`)
+- `work_window_entity` (entity picker: `input_boolean|binary_sensor|sensor`)
 
 ### Validation
 - timezone must be valid IANA TZ
@@ -50,6 +58,7 @@ Each step is independently editable after initial setup.
 
 ### Runtime Effect
 - disabling engine blocks all apply phases but keeps canonical state updates
+- stores the configurable house-signal bindings used by canonical house-state resolution
 
 ---
 
