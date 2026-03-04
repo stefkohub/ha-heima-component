@@ -21,6 +21,12 @@ Decouple notification routing from physical `notify.*` service ids so user/devic
 
 Recipient ids are logical identities. They should remain stable even if devices change.
 
+Note:
+- each `notify_service_name` can be either:
+  - a direct device endpoint (for example `mobile_app_phone_stefano`)
+  - a Home Assistant native grouped notify endpoint (for example `family_notifications`)
+- Heima treats both as plain `notify.*` transport endpoints.
+
 ### 3. Recipient groups
 
 - `recipient_groups` is a mapping:

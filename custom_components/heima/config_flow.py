@@ -80,6 +80,10 @@ def _entity_selector(domains: list[str], multiple: bool = False) -> dict[str, An
     return selector({"entity": {"domain": domains, "multiple": multiple}})
 
 
+def _multiline_text_selector() -> dict[str, Any]:
+    return selector({"text": {"multiline": True}})
+
+
 def _format_source_weights(weights: Any) -> str:
     """Render persisted source weights for the room edit form."""
     if not isinstance(weights, dict):
@@ -702,7 +706,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 ): vol.In(PEOPLE_GROUP_LOGIC),
                 vol.Optional("required", default=defaults.get("required", 1)): cv.positive_int,
                 vol.Optional("weight_threshold"): vol.Coerce(float),
-                vol.Optional("source_weights"): cv.string,
+                vol.Optional("source_weights"): _multiline_text_selector(),
                 vol.Optional("arrive_hold_s", default=defaults.get("arrive_hold_s", 10)):
                 cv.positive_int,
                 vol.Optional("leave_hold_s", default=defaults.get("leave_hold_s", 120)):
@@ -726,7 +730,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 ): vol.In(PEOPLE_GROUP_LOGIC),
                 vol.Optional("required", default=defaults.get("required", 1)): cv.positive_int,
                 vol.Optional("weight_threshold"): vol.Coerce(float),
-                vol.Optional("source_weights"): cv.string,
+                vol.Optional("source_weights"): _multiline_text_selector(),
                 vol.Optional(
                     "anonymous_count_weight", default=defaults.get("anonymous_count_weight", 1)
                 ): cv.positive_int,
@@ -917,7 +921,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional("sources"): _entity_selector(["binary_sensor", "sensor"], multiple=True),
                 vol.Optional("logic", default=defaults.get("logic", "any_of")): vol.In(ROOM_LOGIC),
                 vol.Optional("weight_threshold"): vol.Coerce(float),
-                vol.Optional("source_weights"): cv.string,
+                vol.Optional("source_weights"): _multiline_text_selector(),
                 vol.Optional("on_dwell_s", default=defaults.get("on_dwell_s", 5)): cv.positive_int,
                 vol.Optional("off_dwell_s", default=defaults.get("off_dwell_s", 120)): cv.positive_int,
                 vol.Optional("max_on_s", default=defaults.get("max_on_s")):
@@ -1457,9 +1461,9 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional("routes"): cv.multi_select(
                     self._notify_service_choices(defaults.get("routes", []))
                 ),
-                vol.Optional("recipients"): cv.string,
-                vol.Optional("recipient_groups"): cv.string,
-                vol.Optional("route_targets"): cv.string,
+                vol.Optional("recipients"): _multiline_text_selector(),
+                vol.Optional("recipient_groups"): _multiline_text_selector(),
+                vol.Optional("route_targets"): _multiline_text_selector(),
                 vol.Optional("enabled_event_categories"): cv.multi_select(
                     EVENT_CATEGORIES_TOGGLEABLE
                 ),
