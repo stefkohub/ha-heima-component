@@ -182,3 +182,46 @@ async def test_event_pipeline_retries_deferred_route_when_service_appears():
     assert len(notify_calls) == 1
     assert notify_calls[0][2]["title"] == "first"
     assert pipeline.stats.notify_route_retried == 1
+
+
+@pytest.mark.asyncio
+async def test_event_pipeline_resolves_recipient_aliases_and_groups():
+    bus = _FakeBus()
+    services = _FakeServices(
+        available={
+            "mobile_app_phone_stefano": object(),
+            "mobile_app_mac_stefano": object(),
+            "mobile_app_laura": object(),
+            "mobile_app_legacy": object(),
+        }
+    )
+    hass = SimpleNamespace(bus=bus, services=services)
+    pipeline = HeimaEventPipeline(hass)
+
+    await pipeline.async_emit(
+        HeimaEvent(
+            type="debug.targets",
+            key="debug.targets",
+            severity="info",
+            title="Targets",
+            message="targets",
+        ),
+        routes=["mobile_app_legacy"],
+        recipients={
+            "stefano": ["mobile_app_phone_stefano", "mobile_app_mac_stefano"],
+            "laura": ["mobile_app_laura"],
+        },
+        recipient_groups={"family": ["stefano", "laura"]},
+        route_targets=["family", "stefano", "missing"],
+        dedup_window_s=0,
+        rate_limit_per_key_s=0,
+    )
+
+    called_services = [service for domain, service, _data, _blocking in services.calls if domain == "notify"]
+    assert called_services == [
+        "mobile_app_legacy",
+        "mobile_app_phone_stefano",
+        "mobile_app_mac_stefano",
+        "mobile_app_laura",
+    ]
+    assert pipeline.stats.notify_target_resolution_errors == 1

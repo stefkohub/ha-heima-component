@@ -134,6 +134,30 @@ def test_notifications_payload_normalizes_security_mismatch_policy():
     assert normalized["security_mismatch_persist_s"] == 42
 
 
+def test_notifications_payload_parses_recipients_groups_and_route_targets():
+    flow = _flow()
+    normalized = flow._normalize_notifications_payload(
+        {
+            "routes": ["mobile_app_legacy"],
+            "recipients": (
+                "stefano=mobile_app_phone_stefano,mobile_app_mac_stefano\n"
+                "laura=mobile_app_laura"
+            ),
+            "recipient_groups": "family=stefano,laura\ninvalid=missing",
+            "route_targets": "family\nstefano\nmissing",
+            "enabled_event_categories": [],
+            "dedup_window_s": 60,
+            "rate_limit_per_key_s": 300,
+        }
+    )
+    assert normalized["recipients"] == {
+        "stefano": ["mobile_app_phone_stefano", "mobile_app_mac_stefano"],
+        "laura": ["mobile_app_laura"],
+    }
+    assert normalized["recipient_groups"] == {"family": ["stefano", "laura"]}
+    assert normalized["route_targets"] == ["family", "stefano"]
+
+
 def test_people_payload_parses_weighted_quorum_group_fields():
     flow = _flow()
     normalized = flow._normalize_people_payload(

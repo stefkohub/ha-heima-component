@@ -37,7 +37,9 @@
 - [x] Centralize runtime event gating before pipeline emission.
 - [x] Harden notification routing for startup races (`notify.*` unavailable -> deferred retry, no setup failure).
 - [x] Expand core Event Catalog coverage for `people.*`, `occupancy.*`, `lighting.*`, `security.*`, `system.engine_disabled`.
+- [x] Add notification recipient aliases / recipient groups while keeping legacy `routes` as a compatibility fallback.
 - [ ] Complete remaining Event Catalog coverage (`heating.*`, `security.mismatch`, `system.config_invalid`, `system.behavior_error`) and finalize payload standardization.
+- [ ] Deprecate legacy `notifications.routes` only after recipient aliases/groups are stable and migration semantics are defined.
 
 5. [ ] Cross-Cut — Input Normalization Layer (Incremental Rollout N1-N5)
 - [x] N1 Foundation: add shared normalization contracts + `InputNormalizer` facade + fusion plugin/strategy registry contract (behavior-preserving legacy-backed adapter).

@@ -352,6 +352,9 @@ Runtime Effect:
 
 Fields:
 - `routes` (list of notify services)
+- `recipients` (logical alias mapping, `recipient_id -> list[notify.*]`)
+- `recipient_groups` (logical groups, `group_id -> list[recipient_id]`)
+- `route_targets` (list of logical notification targets: recipient ids or group ids)
 - `enabled_event_categories` (multi-select: `people`, `occupancy`, `house_state`, `lighting`, `heating`, `security`; `system` always enabled)
 - `dedup_window_s` (int, default 60)
 - `rate_limit_per_key_s` (int, default 300)
@@ -363,6 +366,7 @@ Fields:
 
 Runtime Effect:
 - affects notification policy and orchestrator
+- route delivery resolves legacy `routes` plus logical `route_targets` through configured recipients/groups
 - category toggles gate event emission before routing/dedup pipeline
 - occupancy mismatch policy reduces false positives in partial-room-sensing homes
 - security mismatch policy delays/suppresses `armed_away_but_home` false positives caused by stale trackers

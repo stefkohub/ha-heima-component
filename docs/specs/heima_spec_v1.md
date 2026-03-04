@@ -219,6 +219,7 @@ Features:
 - deduplication window
 - rate limiting per event key
 - routing via `notify.*` services
+- recipient aliases / recipient groups above raw `notify.*` services
 
 ---
 

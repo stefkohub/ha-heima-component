@@ -27,6 +27,7 @@ class EventPipelineStats:
     dropped_rate_limited: int = 0
     notify_route_unavailable: int = 0
     notify_route_errors: int = 0
+    notify_target_resolution_errors: int = 0
     notify_route_deferred_dropped: int = 0
     notify_route_delivered: int = 0
     notify_route_retried: int = 0
@@ -40,6 +41,7 @@ class EventPipelineStats:
             "dropped_rate_limited": self.dropped_rate_limited,
             "notify_route_unavailable": self.notify_route_unavailable,
             "notify_route_errors": self.notify_route_errors,
+            "notify_target_resolution_errors": self.notify_target_resolution_errors,
             "notify_route_deferred_dropped": self.notify_route_deferred_dropped,
             "notify_route_delivered": self.notify_route_delivered,
             "notify_route_retried": self.notify_route_retried,
@@ -68,7 +70,10 @@ class HeimaEventPipeline:
         self,
         event: HeimaEvent,
         *,
-        routes: list[str],
+        routes: list[str] | None = None,
+        recipients: dict[str, list[str]] | None = None,
+        recipient_groups: dict[str, list[str]] | None = None,
+        route_targets: list[str] | None = None,
         dedup_window_s: int,
         rate_limit_per_key_s: int,
     ) -> bool:
@@ -103,7 +108,13 @@ class HeimaEventPipeline:
 
         await self._flush_deferred_route_deliveries()
 
-        for route in routes:
+        effective_routes = self._resolve_routes(
+            routes=routes or [],
+            recipients=recipients or {},
+            recipient_groups=recipient_groups or {},
+            route_targets=route_targets or [],
+        )
+        for route in effective_routes:
             if not route:
                 continue
             await self._deliver_or_defer_route(event=event, route=route, is_retry=False)
@@ -188,3 +199,38 @@ class HeimaEventPipeline:
                 "heima_context": event.context,
             },
         }
+
+    def _resolve_routes(
+        self,
+        *,
+        routes: list[str],
+        recipients: dict[str, list[str]],
+        recipient_groups: dict[str, list[str]],
+        route_targets: list[str],
+    ) -> list[str]:
+        resolved: list[str] = []
+        seen: set[str] = set()
+
+        def add_route(route: str) -> None:
+            if not route or route in seen:
+                return
+            seen.add(route)
+            resolved.append(route)
+
+        for route in routes:
+            add_route(route)
+
+        for target in route_targets:
+            if target in recipients:
+                for route in recipients[target]:
+                    add_route(route)
+                continue
+            if target in recipient_groups:
+                for recipient_id in recipient_groups[target]:
+                    for route in recipients.get(recipient_id, []):
+                        add_route(route)
+                continue
+            self._stats.notify_target_resolution_errors += 1
+            _LOGGER.warning("Heima notification target is undefined and was ignored: %s", target)
+
+        return resolved

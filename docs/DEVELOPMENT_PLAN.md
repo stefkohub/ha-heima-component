@@ -131,6 +131,8 @@ Output:
 - Routing su notify.* configurati.
 - Stato attuale:
   - implementato (bus `heima_event` + routing `notify.*`)
+  - supporta destinatari logici (`recipients` / `recipient_groups`) risolti in `notify.*`
+  - `notifications.routes` resta supportato come fallback legacy; deprecazione rimandata
   - `heima.command notify_event` integrato nel pipeline unificato
   - sensori `heima_last_event` / `heima_event_stats` aggiornati
   - manca copertura completa Event Catalog v1

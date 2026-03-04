@@ -94,6 +94,78 @@ def _format_source_weights(weights: Any) -> str:
     return "\n".join(lines)
 
 
+def _format_string_list(values: Any) -> str:
+    """Render persisted list values for a textarea field."""
+    if not isinstance(values, (list, tuple, set)):
+        return ""
+    return "\n".join(str(value) for value in values if str(value).strip())
+
+
+def _format_notify_mapping(mapping: Any) -> str:
+    """Render persisted alias/group mappings as editable text."""
+    if not isinstance(mapping, dict):
+        return ""
+    lines: list[str] = []
+    for key, values in mapping.items():
+        key_str = str(key).strip()
+        if not key_str:
+            continue
+        rendered_values = [str(value).strip() for value in (values or []) if str(value).strip()]
+        if not rendered_values:
+            continue
+        lines.append(f"{key_str}={','.join(rendered_values)}")
+    return "\n".join(lines)
+
+
+def _parse_multiline_items(value: Any) -> list[str]:
+    """Parse comma/newline separated text into a stable list of ids."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if not isinstance(value, str):
+        return [str(value).strip()] if str(value).strip() else []
+    items: list[str] = []
+    for line in value.splitlines():
+        for part in line.split(","):
+            item = part.strip()
+            if item:
+                items.append(item)
+    return items
+
+
+def _parse_multiline_mapping(value: Any) -> dict[str, list[str]]:
+    """Parse `key=a,b` lines into a normalized mapping."""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        normalized: dict[str, list[str]] = {}
+        for key, items in value.items():
+            key_str = str(key).strip()
+            if not key_str:
+                continue
+            normalized_items = _parse_multiline_items(items)
+            if normalized_items:
+                normalized[key_str] = normalized_items
+        return normalized
+    if not isinstance(value, str):
+        return {}
+
+    mapping: dict[str, list[str]] = {}
+    for raw_line in value.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        key, sep, remainder = line.partition("=")
+        key = key.strip()
+        if not sep or not key:
+            continue
+        items = _parse_multiline_items(remainder)
+        if items:
+            mapping[key] = items
+    return mapping
+
+
 def _normalize_house_signal_bindings(value: Any) -> dict[str, str]:
     """Normalize configured house-signal entity bindings."""
     if not isinstance(value, dict):
@@ -276,6 +348,21 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
     def _normalize_notifications_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         data = dict(payload)
         data["routes"] = self._normalize_multi_value(data.get("routes"))
+        data["recipients"] = _parse_multiline_mapping(data.get("recipients"))
+        data["recipient_groups"] = _parse_multiline_mapping(data.get("recipient_groups"))
+        data["route_targets"] = _parse_multiline_items(data.get("route_targets"))
+        recipient_ids = set(data["recipients"])
+        normalized_groups: dict[str, list[str]] = {}
+        for group_id, members in data["recipient_groups"].items():
+            valid_members = [member for member in members if member in recipient_ids]
+            if valid_members:
+                normalized_groups[group_id] = valid_members
+        data["recipient_groups"] = normalized_groups
+        data["route_targets"] = [
+            target
+            for target in data["route_targets"]
+            if target in recipient_ids or target in normalized_groups
+        ]
         categories_present = "enabled_event_categories" in data
         categories = self._normalize_multi_value(data.get("enabled_event_categories"))
         if categories_present:
@@ -1357,11 +1444,22 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
 
     def _notifications_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
         defaults = defaults or {}
+        schema_defaults = dict(defaults)
+        schema_defaults["recipients"] = _format_notify_mapping(schema_defaults.get("recipients"))
+        schema_defaults["recipient_groups"] = _format_notify_mapping(
+            schema_defaults.get("recipient_groups")
+        )
+        schema_defaults["route_targets"] = _format_string_list(
+            schema_defaults.get("route_targets")
+        )
         schema = vol.Schema(
             {
                 vol.Optional("routes"): cv.multi_select(
                     self._notify_service_choices(defaults.get("routes", []))
                 ),
+                vol.Optional("recipients"): cv.string,
+                vol.Optional("recipient_groups"): cv.string,
+                vol.Optional("route_targets"): cv.string,
                 vol.Optional("enabled_event_categories"): cv.multi_select(
                     EVENT_CATEGORIES_TOGGLEABLE
                 ),
@@ -1403,7 +1501,7 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 ): _NON_NEGATIVE_INT,
             }
         )
-        defaults_with_categories = dict(defaults)
+        defaults_with_categories = dict(schema_defaults)
         defaults_with_categories.setdefault(
             "enabled_event_categories", list(DEFAULT_ENABLED_EVENT_CATEGORIES)
         )

@@ -1807,6 +1807,9 @@ class HeimaEngine:
         return await self._events.async_emit(
             event,
             routes=list(notifications_cfg.get("routes", [])),
+            recipients=dict(notifications_cfg.get("recipients", {})),
+            recipient_groups=dict(notifications_cfg.get("recipient_groups", {})),
+            route_targets=list(notifications_cfg.get("route_targets", [])),
             dedup_window_s=int(notifications_cfg.get("dedup_window_s", 60)),
             rate_limit_per_key_s=int(notifications_cfg.get("rate_limit_per_key_s", 300)),
         )

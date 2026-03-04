@@ -47,7 +47,12 @@ class _FakeServicesRegistry:
         return None
 
     def async_services(self):
-        return {"notify": {"mobile_app_test": object()}}
+        return {
+            "notify": {
+                "mobile_app_test": object(),
+                "mobile_app_alias_test": object(),
+            }
+        }
 
     def handler(self, domain, service):
         return self._handlers[(domain, service)]
@@ -111,6 +116,9 @@ async def test_heima_command_notify_event_uses_pipeline_and_updates_sensors(monk
         options={
             "notifications": {
                 "routes": ["mobile_app_test"],
+                "recipients": {"stefano": ["mobile_app_alias_test"]},
+                "recipient_groups": {"family": ["stefano"]},
+                "route_targets": ["family"],
                 "dedup_window_s": 60,
                 "rate_limit_per_key_s": 300,
             }
@@ -150,8 +158,9 @@ async def test_heima_command_notify_event_uses_pipeline_and_updates_sensors(monk
     assert hass.bus.events[-1][1]["type"] == "debug.manual_test"
 
     # Routed to notify.*
-    notify_calls = [c for c in services.calls if c[0] == "notify" and c[1] == "mobile_app_test"]
-    assert notify_calls, "Expected notify.mobile_app_test to be called"
+    notify_calls = [c for c in services.calls if c[0] == "notify"]
+    called_services = [service for _domain, service, _data, _blocking in notify_calls]
+    assert called_services == ["mobile_app_test", "mobile_app_alias_test"]
     _, _, notify_payload, _ = notify_calls[-1]
     assert notify_payload["title"] == "Test"
     assert notify_payload["message"] == "hello"
