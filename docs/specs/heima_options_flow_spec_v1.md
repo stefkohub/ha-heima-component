@@ -265,7 +265,7 @@ Common fields:
 - `vacation_ramp_up_h` (float, required, >= 0)
 - `vacation_min_temp` (float, required, > 0)
 - `vacation_comfort_temp` (float, required, > 0)
-- `vacation_start_temp` (float, required, > 0)
+  - semantic meaning: return preheat target before control is handed back to the external scheduler
 - `vacation_min_total_hours_for_ramp` (float, required, >= 0)
 
 ### 7.5 Heating — Validation Rules
@@ -283,6 +283,8 @@ Branch-specific:
   - all vacation fields required
   - all temperatures > 0
   - hour-based values >= 0
+  - no user-configured start temperature field:
+    - branch start temperature is captured at runtime from the thermostat when the branch activates
 
 Cross-checks:
 - if any branch uses `vacation_curve`, the relevant timing bindings should be present in `Heating General`
@@ -314,7 +316,6 @@ heating:
       vacation_ramp_up_h: 10
       vacation_min_temp: 16.5
       vacation_comfort_temp: 19.5
-      vacation_start_temp: 19.5
       vacation_min_total_hours_for_ramp: 24
     sleeping:
       branch: fixed_target

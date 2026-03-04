@@ -268,7 +268,6 @@ async def test_vacation_curve_branch_computes_target_and_executes_apply():
                     "vacation_ramp_up_h": 10.0,
                     "vacation_min_temp": 16.5,
                     "vacation_comfort_temp": 19.5,
-                    "vacation_start_temp": 19.5,
                     "vacation_min_total_hours_for_ramp": 24.0,
                 }
             },
@@ -297,7 +296,7 @@ async def test_vacation_curve_branch_computes_target_and_executes_apply():
     assert engine.state.get_sensor("heima_heating_reason") == "vacation_curve_branch"
     assert engine.state.get_sensor("heima_heating_phase") == "ramp_down"
     assert engine.state.get_sensor("heima_heating_branch") == "vacation_curve"
-    assert engine.state.get_sensor("heima_heating_target_temp") == 19.0
+    assert engine.state.get_sensor("heima_heating_target_temp") == 17.5
     assert any(step.action == "climate.set_temperature" for step in plan.steps)
 
     await engine._execute_apply_plan(plan)
@@ -308,13 +307,64 @@ async def test_vacation_curve_branch_computes_target_and_executes_apply():
         {
             "entity_id": "climate.test_thermostat",
             "hvac_mode": "heat",
-            "temperature": 19.0,
+            "temperature": 17.5,
         },
         False,
     )
     trace = engine.diagnostics()["heating"]
     assert trace["vacation"]["is_long"] is True
-    assert trace["vacation"]["raw_target"] == 18.75
+    assert trace["vacation"]["raw_target"] == 17.625
+    assert trace["vacation"]["return_preheat_target"] == 19.5
+    assert trace["vacation"]["scheduler_handoff_on_exit"] is True
+    assert trace["vacation"]["start_temp"] == 18.0
+
+
+def test_vacation_curve_captures_start_temperature_on_branch_activation_and_reuses_it():
+    options = _with_house_signal_binding(
+        {
+            "heating": {
+                "climate_entity": "climate.test_thermostat",
+                "apply_mode": "set_temperature",
+                "temperature_step": 0.5,
+                "manual_override_guard": True,
+                "outdoor_temperature_entity": "sensor.outdoor_temp",
+                "vacation_hours_from_start_entity": "sensor.vacation_from",
+                "vacation_hours_to_end_entity": "sensor.vacation_to",
+                "vacation_total_hours_entity": "sensor.vacation_total",
+                "vacation_is_long_entity": "binary_sensor.vacation_long",
+                "override_branches": {
+                    "vacation": {
+                        "branch": "vacation_curve",
+                        "vacation_ramp_down_h": 8.0,
+                        "vacation_ramp_up_h": 10.0,
+                        "vacation_min_temp": 16.5,
+                        "vacation_comfort_temp": 19.5,
+                        "vacation_min_total_hours_for_ramp": 24.0,
+                    }
+                },
+            }
+        },
+        vacation_mode="input_boolean.vacation_mode",
+    )
+    engine = _build_engine(
+        options,
+        {
+            "input_boolean.vacation_mode": "on",
+            "climate.test_thermostat": ("heat", {"temperature": 21.0}),
+            "sensor.outdoor_temp": "5.0",
+            "sensor.vacation_from": "2.0",
+            "sensor.vacation_to": "30.0",
+            "sensor.vacation_total": "32.0",
+            "binary_sensor.vacation_long": "on",
+        },
+    )
+
+    engine._compute_snapshot(reason="first")
+    assert engine.diagnostics()["heating"]["vacation"]["start_temp"] == 21.0
+
+    engine._hass.states._values["climate.test_thermostat"] = ("heat", {"temperature": 17.0})
+    engine._compute_snapshot(reason="second")
+    assert engine.diagnostics()["heating"]["vacation"]["start_temp"] == 21.0
 
 
 @pytest.mark.asyncio
@@ -338,7 +388,6 @@ async def test_heating_runtime_emits_phase_and_target_events_for_vacation_curve(
                     "vacation_ramp_up_h": 10.0,
                     "vacation_min_temp": 16.5,
                     "vacation_comfort_temp": 19.5,
-                    "vacation_start_temp": 19.5,
                     "vacation_min_total_hours_for_ramp": 24.0,
                 }
             },
@@ -386,7 +435,6 @@ async def test_heating_runtime_emits_branch_changed_event_on_transition():
                     "vacation_ramp_up_h": 10.0,
                     "vacation_min_temp": 16.5,
                     "vacation_comfort_temp": 19.5,
-                    "vacation_start_temp": 19.5,
                     "vacation_min_total_hours_for_ramp": 24.0,
                 },
             },
@@ -470,7 +518,6 @@ def test_vacation_curve_without_required_bindings_is_inactive():
                     "vacation_ramp_up_h": 10.0,
                     "vacation_min_temp": 16.5,
                     "vacation_comfort_temp": 19.5,
-                    "vacation_start_temp": 19.5,
                     "vacation_min_total_hours_for_ramp": 24.0,
                 }
             },
@@ -512,7 +559,6 @@ async def test_heating_runtime_emits_vacation_bindings_unavailable_event_once_pe
                     "vacation_ramp_up_h": 10.0,
                     "vacation_min_temp": 16.5,
                     "vacation_comfort_temp": 19.5,
-                    "vacation_start_temp": 19.5,
                     "vacation_min_total_hours_for_ramp": 24.0,
                 }
             },

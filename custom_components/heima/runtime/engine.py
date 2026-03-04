@@ -84,6 +84,7 @@ class HeimaEngine:
         self._lighting_room_trace: dict[str, list[dict[str, Any]]] = {}
         self._lighting_conflicts_last_eval: list[dict[str, Any]] = []
         self._heating_trace: dict[str, Any] = {}
+        self._heating_vacation_curve_start_temp: float | None = None
         self._heating_last_target_temp: float | None = None
         self._heating_last_apply_ts: float | None = None
         self._heating_last_reported_phase: str | None = None
@@ -571,6 +572,7 @@ class HeimaEngine:
     def _compute_heating_runtime(self, *, house_state: str) -> None:
         heating_cfg = dict(self._entry.options.get(OPT_HEATING, {}))
         if not heating_cfg:
+            self._heating_vacation_curve_start_temp = None
             self._heating_trace = {
                 "configured": False,
                 "state": "idle",
@@ -585,6 +587,7 @@ class HeimaEngine:
         branches = heating_cfg.get("override_branches", {})
         branch_cfg = dict(branches.get(house_state, {})) if isinstance(branches, dict) else {}
         branch_type = str(branch_cfg.get("branch", "disabled") or "disabled")
+        previous_selected_branch = str(self._heating_trace.get("selected_branch", "disabled") or "disabled")
         manual_guard_enabled = bool(heating_cfg.get("manual_override_guard", True))
         manual_hold = bool(self._state.get_binary("heima_heating_manual_hold"))
         temperature_step = self._coerce_positive_float(heating_cfg.get("temperature_step"), default=0.5)
@@ -639,6 +642,8 @@ class HeimaEngine:
                     temperature_step=temperature_step,
                 )
         elif branch_type == "vacation_curve":
+            if previous_selected_branch != "vacation_curve":
+                self._heating_vacation_curve_start_temp = current_setpoint
             (
                 target_temperature,
                 phase,
@@ -649,6 +654,7 @@ class HeimaEngine:
                 branch_cfg=branch_cfg,
                 outdoor_temperature=outdoor_temperature,
                 temperature_step=temperature_step,
+                start_temperature=self._heating_vacation_curve_start_temp,
             )
             if vacation_error:
                 state = "inactive"
@@ -676,6 +682,9 @@ class HeimaEngine:
                 )
         else:
             branch_type = "disabled"
+
+        if branch_type != "vacation_curve":
+            self._heating_vacation_curve_start_temp = None
 
         self._state.set_sensor("heima_heating_state", state)
         self._state.set_sensor("heima_heating_reason", reason)
@@ -713,6 +722,7 @@ class HeimaEngine:
             "last_applied_target": self._heating_last_target_temp,
             "last_apply_ts": self._heating_last_apply_ts,
             "vacation": dict(vacation_meta),
+            "vacation_curve_start_temp": self._heating_vacation_curve_start_temp,
         }
         self._queue_heating_runtime_events(
             selected_branch=branch_type,
@@ -941,7 +951,8 @@ class HeimaEngine:
             if ramp_up_h <= 0:
                 return None
             slope_per_hour = (
-                float(vacation_meta.get("comfort_temp", 0.0)) - float(vacation_meta.get("min_safety", 0.0))
+                float(vacation_meta.get("return_preheat_target", 0.0))
+                - float(vacation_meta.get("min_safety", 0.0))
             ) / ramp_up_h
         else:
             return None
@@ -1001,6 +1012,7 @@ class HeimaEngine:
         branch_cfg: dict[str, Any],
         outdoor_temperature: float | None,
         temperature_step: float,
+        start_temperature: float | None,
     ) -> tuple[float | None, str, dict[str, Any], str | None]:
         hours_from = self._coerce_float_from_entity(heating_cfg.get("vacation_hours_from_start_entity"))
         hours_to = self._coerce_float_from_entity(heating_cfg.get("vacation_hours_to_end_entity"))
@@ -1013,8 +1025,11 @@ class HeimaEngine:
             default=None,
         )
         min_temp = self._coerce_positive_float(branch_cfg.get("vacation_min_temp"), default=None)
-        comfort_temp = self._coerce_positive_float(branch_cfg.get("vacation_comfort_temp"), default=None)
-        start_temp = self._coerce_positive_float(branch_cfg.get("vacation_start_temp"), default=None)
+        return_preheat_temp = self._coerce_positive_float(
+            branch_cfg.get("vacation_comfort_temp"),
+            default=None,
+        )
+        start_temp = self._coerce_positive_float(start_temperature, default=None)
 
         if None in (
             hours_from,
@@ -1024,7 +1039,7 @@ class HeimaEngine:
             ramp_up,
             min_total_hours_for_ramp,
             min_temp,
-            comfort_temp,
+            return_preheat_temp,
             start_temp,
             outdoor_temperature,
         ):
@@ -1053,7 +1068,7 @@ class HeimaEngine:
                 raw_target = start_temp + (eco - start_temp) * (hours_from / ramp_down)
                 phase = "ramp_down"
             elif ramp_up > 0 and hours_to < ramp_up:
-                raw_target = eco + (comfort_temp - eco) * (1 - (hours_to / ramp_up))
+                raw_target = eco + (return_preheat_temp - eco) * (1 - (hours_to / ramp_up))
                 phase = "ramp_up"
 
         quantized = round(raw_target / temperature_step) * temperature_step
@@ -1070,11 +1085,12 @@ class HeimaEngine:
                 "ramp_up_h": ramp_up,
                 "min_total_hours_for_ramp": min_total_hours_for_ramp,
                 "min_temp": min_temp,
-                "comfort_temp": comfort_temp,
+                "return_preheat_target": return_preheat_temp,
                 "start_temp": start_temp,
                 "raw_target": round(float(raw_target), 4),
                 "quantized_target": target,
                 "min_safety": min_safety,
+                "scheduler_handoff_on_exit": True,
             },
             None,
         )

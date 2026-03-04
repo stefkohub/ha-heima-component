@@ -634,12 +634,11 @@ async def test_e2e_heating_vacation_curve_branch_computes_and_applies_target(
                     "override_branches": {
                         "vacation": {
                             "branch": "vacation_curve",
-                            "vacation_ramp_down_h": 8.0,
-                            "vacation_ramp_up_h": 10.0,
-                            "vacation_min_temp": 16.5,
-                            "vacation_comfort_temp": 19.5,
-                            "vacation_start_temp": 19.5,
-                            "vacation_min_total_hours_for_ramp": 24.0,
+                        "vacation_ramp_down_h": 8.0,
+                        "vacation_ramp_up_h": 10.0,
+                        "vacation_min_temp": 16.5,
+                        "vacation_comfort_temp": 19.5,
+                        "vacation_min_total_hours_for_ramp": 24.0,
                         }
                     },
                 }
@@ -666,13 +665,13 @@ async def test_e2e_heating_vacation_curve_branch_computes_and_applies_target(
     assert hass.states.get("sensor.heima_heating_reason").state == "vacation_curve_branch"
     assert hass.states.get("sensor.heima_heating_phase").state == "ramp_down"
     assert hass.states.get("sensor.heima_heating_branch").state == "vacation_curve"
-    assert float(hass.states.get("sensor.heima_heating_target_temp").state) == 19.0
+    assert float(hass.states.get("sensor.heima_heating_target_temp").state) == 17.5
 
     assert calls == [
         {
             "entity_id": "climate.test_thermostat",
             "hvac_mode": "heat",
-            "temperature": 19.0,
+            "temperature": 17.5,
         }
     ]
 
@@ -680,7 +679,7 @@ async def test_e2e_heating_vacation_curve_branch_computes_and_applies_target(
     trace = coordinator.engine.diagnostics()["heating"]
     assert trace["selected_branch"] == "vacation_curve"
     assert trace["vacation"]["is_long"] is True
-    assert trace["vacation"]["quantized_target"] == 19.0
+    assert trace["vacation"]["quantized_target"] == 17.5
 
 
 @pytest.mark.asyncio
@@ -854,12 +853,11 @@ async def test_e2e_heating_vacation_curve_registers_and_fires_scheduler_recheck(
                     "override_branches": {
                         "vacation": {
                             "branch": "vacation_curve",
-                            "vacation_ramp_down_h": 8.0,
-                            "vacation_ramp_up_h": 10.0,
-                            "vacation_min_temp": 16.5,
-                            "vacation_comfort_temp": 19.5,
-                            "vacation_start_temp": 19.5,
-                            "vacation_min_total_hours_for_ramp": 24.0,
+                        "vacation_ramp_down_h": 8.0,
+                        "vacation_ramp_up_h": 10.0,
+                        "vacation_min_temp": 16.5,
+                        "vacation_comfort_temp": 19.5,
+                        "vacation_min_total_hours_for_ramp": 24.0,
                         }
                     }
                 },

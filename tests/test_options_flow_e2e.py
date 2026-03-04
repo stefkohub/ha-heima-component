@@ -187,7 +187,6 @@ async def test_heating_flow_persists_general_config_and_branch_mapping():
             "vacation_ramp_up_h": 10,
             "vacation_min_temp": 16.5,
             "vacation_comfort_temp": 19.5,
-            "vacation_start_temp": 19.5,
             "vacation_min_total_hours_for_ramp": 24,
         }
     )

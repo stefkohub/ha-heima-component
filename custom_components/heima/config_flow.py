@@ -369,7 +369,6 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 "vacation_ramp_up_h",
                 "vacation_min_temp",
                 "vacation_comfort_temp",
-                "vacation_start_temp",
                 "vacation_min_total_hours_for_ramp",
             ):
                 if payload.get(key) not in (None, ""):
@@ -1251,7 +1250,6 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
                 "vacation_ramp_up_h",
                 "vacation_min_temp",
                 "vacation_comfort_temp",
-                "vacation_start_temp",
                 "vacation_min_total_hours_for_ramp",
             ):
                 schema_map[vol.Optional(key)] = vol.Coerce(float)
@@ -1281,7 +1279,6 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
             for key in (
                 "vacation_min_temp",
                 "vacation_comfort_temp",
-                "vacation_start_temp",
             ):
                 try:
                     if float(payload.get(key, 0)) <= 0:

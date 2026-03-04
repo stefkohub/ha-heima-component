@@ -183,8 +183,7 @@ Validation:
 - `vacation_ramp_down_h`
 - `vacation_ramp_up_h`
 - `vacation_min_temp`
-- `vacation_comfort_temp`
-- `vacation_start_temp`
+- `vacation_comfort_temp` (semantic meaning: return preheat target before scheduler handoff)
 - `vacation_min_total_hours_for_ramp`
 
 Outdoor safety thresholds (v1 default fixed logic):
@@ -206,13 +205,16 @@ override_branches:
     vacation_ramp_up_h: 10
     vacation_min_temp: 16.5
     vacation_comfort_temp: 19.5
-    vacation_start_temp: 19.5
     vacation_min_total_hours_for_ramp: 24
 ```
 
 Rules:
 - all vacation parameters belong to the `vacation_curve` branch config
 - these values are branch-local, not global heating values
+- the curve start temperature is **not** user-configured:
+  - it is captured from the current thermostat setpoint when the `vacation_curve` branch becomes active
+- `vacation_comfort_temp` is not the authoritative post-vacation scheduler setpoint:
+  - it is a preheat target used before control is handed back to the external scheduler
 - if a branch is not `vacation_curve`, these fields are invalid and must be rejected or dropped
 
 This keeps the configuration aligned with the branch-selector model.
@@ -313,11 +315,16 @@ If phase = `cruise`:
 - `t_raw = t_min_safety`
 
 If phase = `ramp_down`:
-- linear interpolation from `vacation_start_temp` to `t_min_safety`
+- linear interpolation from the captured thermostat setpoint at branch activation to `t_min_safety`
 - ratio = `hours_from_start / vacation_ramp_down_h`
 
+The captured start temperature:
+- is taken once when `vacation_curve` becomes the active branch
+- is reused for the full duration of that active branch
+- is cleared when the branch stops being active
+
 If phase = `ramp_up`:
-- linear interpolation from `t_min_safety` to `vacation_comfort_temp`
+- linear interpolation from `t_min_safety` to the configured return preheat target (`vacation_comfort_temp`)
 - ratio = `1 - (hours_to_end / vacation_ramp_up_h)`
 
 If timing data is invalid (`total_hours <= 0`):
@@ -328,6 +335,16 @@ If timing data is invalid (`total_hours <= 0`):
 The computed target is quantized to the thermostat step:
 
 - `target = round(t_raw / temperature_step) * temperature_step`
+
+### 6.7 Scheduler handoff semantics
+
+When the vacation branch ends:
+- Heima stops overriding the thermostat
+- control returns to the external scheduler (`scheduler_delegate` / normal branch)
+- the scheduler may immediately apply a different setpoint than `vacation_comfort_temp`
+
+This is expected in v1.
+`vacation_comfort_temp` is therefore a return preheat target before handoff, not a guaranteed final post-vacation thermostat target.
 
 This is required to avoid impossible or noisy setpoints.
 

@@ -253,8 +253,7 @@
           "vacation_ramp_down_h": "Ore ramp-down vacanza",
           "vacation_ramp_up_h": "Ore ramp-up vacanza",
           "vacation_min_temp": "Temperatura minima vacanza",
-          "vacation_comfort_temp": "Temperatura comfort vacanza",
-          "vacation_start_temp": "Temperatura iniziale vacanza",
+          "vacation_comfort_temp": "Temperatura preriscaldamento rientro vacanza",
           "vacation_min_total_hours_for_ramp": "Ore totali minime per ramp vacanza"
         }
       }
