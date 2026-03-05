@@ -592,37 +592,37 @@ Fields:
   - not deprecated yet
 
 ### `recipients`
-- Type: multiline text
+- Type: object editor (JSON-like mapping)
 - Optional
 - Meaning: logical recipient aliases mapped to one or more `notify.*` services
-- Format:
-  - one line per alias
-  - `alias=notify_service_a,notify_service_b`
-- Example:
-```text
-stefano=mobile_app_phone_stefano,mobile_app_mac_stefano
-laura=mobile_app_laura
+Example:
+```json
+{
+  "stefano": ["mobile_app_phone_stefano", "mobile_app_mac_stefano"],
+  "laura": ["mobile_app_laura"]
+}
 ```
 
 You can also map aliases to Home Assistant native grouped notify services.
 Example:
-```text
-stefano=mobile_app_phone_stefano,mobile_app_mac_stefano
-family_transport=family_notifications
+```json
+{
+  "stefano": ["mobile_app_phone_stefano", "mobile_app_mac_stefano"],
+  "family_transport": ["family_notifications"]
+}
 ```
 Where `family_notifications` is an existing `notify.*` service in HA.
 
 ### `recipient_groups`
-- Type: multiline text
+- Type: object editor (JSON-like mapping)
 - Optional
 - Meaning: logical groups mapped to recipient aliases
-- Format:
-  - one line per group
-  - `group=recipient_a,recipient_b`
 - Example:
-```text
-family=stefano,laura
-admins=stefano
+```json
+{
+  "family": ["stefano", "laura"],
+  "admins": ["stefano"]
+}
 ```
 
 Note:
@@ -630,16 +630,15 @@ Note:
 - if you want to use a HA-native notify group, map it in `recipients` first and then reference that alias in `recipient_groups` and/or `route_targets`.
 
 ### `route_targets`
-- Type: multiline text
+- Type: object editor (array or map-like)
 - Optional
 - Meaning: default logical notification targets used by the event pipeline
 - Values may be:
   - recipient aliases
   - group ids
 - Example:
-```text
-family
-admins
+```json
+["family", "admins"]
 ```
 
 ### `enabled_event_categories`

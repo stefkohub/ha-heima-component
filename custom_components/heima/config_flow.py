@@ -84,6 +84,10 @@ def _multiline_text_selector() -> dict[str, Any]:
     return selector({"text": {"multiline": True}})
 
 
+def _object_selector() -> dict[str, Any]:
+    return selector({"object": {}})
+
+
 def _format_source_weights(weights: Any) -> str:
     """Render persisted source weights for the room edit form."""
     if not isinstance(weights, dict):
@@ -125,6 +129,9 @@ def _parse_multiline_items(value: Any) -> list[str]:
     """Parse comma/newline separated text into a stable list of ids."""
     if value is None:
         return []
+    if isinstance(value, dict):
+        # Defensive normalization for map-like payloads.
+        return [str(k).strip() for k, enabled in value.items() if enabled and str(k).strip()]
     if isinstance(value, (list, tuple, set)):
         return [str(item).strip() for item in value if str(item).strip()]
     if not isinstance(value, str):
@@ -1449,21 +1456,14 @@ class HeimaOptionsFlowHandler(config_entries.OptionsFlow):
     def _notifications_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
         defaults = defaults or {}
         schema_defaults = dict(defaults)
-        schema_defaults["recipients"] = _format_notify_mapping(schema_defaults.get("recipients"))
-        schema_defaults["recipient_groups"] = _format_notify_mapping(
-            schema_defaults.get("recipient_groups")
-        )
-        schema_defaults["route_targets"] = _format_string_list(
-            schema_defaults.get("route_targets")
-        )
         schema = vol.Schema(
             {
                 vol.Optional("routes"): cv.multi_select(
                     self._notify_service_choices(defaults.get("routes", []))
                 ),
-                vol.Optional("recipients"): _multiline_text_selector(),
-                vol.Optional("recipient_groups"): _multiline_text_selector(),
-                vol.Optional("route_targets"): _multiline_text_selector(),
+                vol.Optional("recipients"): _object_selector(),
+                vol.Optional("recipient_groups"): _object_selector(),
+                vol.Optional("route_targets"): _object_selector(),
                 vol.Optional("enabled_event_categories"): cv.multi_select(
                     EVENT_CATEGORIES_TOGGLEABLE
                 ),

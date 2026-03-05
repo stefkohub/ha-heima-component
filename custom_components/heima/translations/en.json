@@ -227,9 +227,9 @@
         "title": "Notifications",
         "data": {
           "routes": "Notify routes",
-          "recipients": "Recipient aliases (one per line: alias=notify.service_a,notify.service_b)",
-          "recipient_groups": "Recipient groups (one per line: group=alias_a,alias_b)",
-          "route_targets": "Default notification targets (aliases/groups, one per line)",
+          "recipients": "Recipient aliases (object mapping: alias -> [notify services])",
+          "recipient_groups": "Recipient groups (object mapping: group -> [aliases])",
+          "route_targets": "Default notification targets (aliases/groups)",
           "enabled_event_categories": "Enabled event categories",
           "dedup_window_s": "Dedup window (s)",
           "rate_limit_per_key_s": "Rate limit per key (s)",

@@ -227,9 +227,9 @@
         "title": "Notifiche",
         "data": {
           "routes": "Route notify",
-          "recipients": "Alias destinatari (una riga per alias=notify.servizio_a,notify.servizio_b)",
-          "recipient_groups": "Gruppi destinatari (una riga per gruppo=alias_a,alias_b)",
-          "route_targets": "Target notifica predefiniti (alias/gruppi, una riga per voce)",
+          "recipients": "Alias destinatari (mappa oggetto: alias -> [servizi notify])",
+          "recipient_groups": "Gruppi destinatari (mappa oggetto: gruppo -> [alias])",
+          "route_targets": "Target notifica predefiniti (alias/gruppi)",
           "enabled_event_categories": "Categorie evento abilitate",
           "dedup_window_s": "Finestra dedup (s)",
           "rate_limit_per_key_s": "Rate limit per key (s)",
